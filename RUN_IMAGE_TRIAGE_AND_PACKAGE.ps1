@@ -14,8 +14,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
-$Version = "3.4.3"
-$VersionToken = "v3_4_3"
+$Version = "3.7.0"
+$VersionToken = "v3_7_0"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
 function Assert-PathIsNotPlaceholder {
@@ -38,7 +38,7 @@ if (-not (Test-Path -LiteralPath $CaseBaseRoot -PathType Container)) {
 
 if ([string]::IsNullOrWhiteSpace($CaseRoot)) {
     if ([string]::IsNullOrWhiteSpace($CaseName)) {
-        $CaseName = "V3_4_3_0186_0015_IT001_Triage_$Stamp"
+        $CaseName = "V3_7_0_0186_0015_IT001_Triage_$Stamp"
     }
     $CaseRoot = Join-Path $CaseBaseRoot $CaseName
 }
@@ -62,8 +62,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $CaseRoot "Upload") | Out-N
 
 if ([string]::IsNullOrWhiteSpace($OutZip)) {
     $safeCase = ($CaseName -replace '[^A-Za-z0-9._-]', '_').Trim('_','.')
-    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_4_3_AutoImageTriage_$Stamp" }
-    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_4_3_$safeCase.zip"
+    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_7_0_AutoImageTriage_$Stamp" }
+    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_7_0_$safeCase.zip"
 }
 
 $RunLog = Join-Path $CaseRoot "Upload\RUN_IMAGE_TRIAGE_AND_PACKAGE_$Stamp.log"

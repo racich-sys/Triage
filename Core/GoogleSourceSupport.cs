@@ -248,32 +248,122 @@ internal static class GoogleSourceSupport
 
     public static string NormalizeOperation(string family, string operation, IDictionary<string, string> row)
     {
-        var text = FirstNonBlank(operation, Get(row, "Description"), Get(row, "Action"));
-        var lower = text.ToLowerInvariant();
+        var text = FirstNonBlank(Get(row, "Event"), Get(row, "OAuth event"), Get(row, "Action"), Get(row, "Activity Type"), operation, Get(row, "Description"));
+        var key = OperationKey(text);
+
         if (family.Equals("Drive", StringComparison.OrdinalIgnoreCase))
         {
-            if (lower.Contains("download") || lower.Contains("export")) return "FileDownloaded";
-            if (lower.Contains("share") || lower.Contains("visibility") || lower.Contains("permission") || lower.Contains("link")) return "GoogleDrive_SharingOrVisibilityChanged";
-            if (lower.Contains("delete") || lower.Contains("trash")) return "FileDeleted";
-            if (lower.Contains("copy")) return "GoogleDrive_FileCopied";
-            if (lower.Contains("move")) return "GoogleDrive_FileMoved";
-            if (lower.Contains("preview") || lower.Contains("view") || lower.Contains("open")) return "GoogleDrive_FileAccessed";
+            return key switch
+            {
+                "download" => "FileDownloaded",
+                "export" => "GoogleDrive_FileExported",
+                "change document visibility" => "GoogleDrive_VisibilityChanged",
+                "user sharing permissions change" => "GoogleDrive_UserSharingPermissionsChanged",
+                "change user access" => "GoogleDrive_UserAccessChanged",
+                "change access scope" => "GoogleDrive_AccessScopeChanged",
+                "item content synced" => "GoogleDrive_ItemContentSynced",
+                "item content accessed" => "GoogleDrive_FileContentAccessed",
+                "item content prefetched" => "GoogleDrive_FileContentPrefetched",
+                "item search performed" => "GoogleDrive_SearchPerformed",
+                "delete" => "FileDeleted",
+                "trash" => "FileTrashed",
+                "create" => "FileCreated",
+                "upload" => "FileUploaded",
+                "edit" => "FileModified",
+                "view" => "GoogleDrive_FileAccessed",
+                "rename" => "FileRenamed",
+                "move" => "GoogleDrive_FileMoved",
+                "copy" => "GoogleDrive_FileCopied",
+                "source copy" => "GoogleDrive_SourceCopied",
+                "comment created" => "GoogleDrive_CommentCreated",
+                "comment edited" => "GoogleDrive_CommentEdited",
+                "comment deleted" => "GoogleDrive_CommentDeleted",
+                "comment resolved" => "GoogleDrive_CommentResolved",
+                "suggestion created" => "GoogleDrive_SuggestionCreated",
+                "suggestion accepted" => "GoogleDrive_SuggestionAccepted",
+                "suggestion rejected" => "GoogleDrive_SuggestionRejected",
+                "suggestion deleted" => "GoogleDrive_SuggestionDeleted",
+                "access requested" => "GoogleDrive_AccessRequested",
+                "access request denied" => "GoogleDrive_AccessRequestDenied",
+                "access request expired" => "GoogleDrive_AccessRequestExpired",
+                _ => "GoogleDrive_" + SafeOperationToken(text)
+            };
         }
+
         if (family.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
         {
-            if (lower.Contains("download") && lower.Contains("attachment")) return "GoogleGmail_AttachmentDownloaded";
-            if (lower.Contains("forward")) return "GoogleGmail_ForwardingObserved";
-            if (lower.Contains("delegate")) return "GoogleGmail_DelegationObserved";
-            if (lower.Contains("send") || lower.Contains("sent")) return "GoogleGmail_MessageSent";
-            if (lower.Contains("access") || lower.Contains("read") || lower.Contains("view")) return "MailItemsAccessed";
+            return key switch
+            {
+                "send" => "GoogleGmail_MessageSent",
+                "receive" => "GoogleGmail_MessageReceived",
+                "view" => "MailItemsAccessed",
+                "open" => "GoogleGmail_MessageOpened",
+                "message content accessed" => "GoogleGmail_MessageContentAccessed",
+                "draft" => "GoogleGmail_DraftObserved",
+                "delete" => "GoogleGmail_MessageDeleted",
+                "move to trash" => "GoogleGmail_MessageMovedToTrash",
+                "move out of trash" => "GoogleGmail_MessageMovedOutOfTrash",
+                "move to inbox" => "GoogleGmail_MessageMovedToInbox",
+                "archive" => "GoogleGmail_MessageArchived",
+                "reply" => "GoogleGmail_MessageReplied",
+                "mark unread" => "GoogleGmail_MessageMarkedUnread",
+                "attachment preview" => "GoogleGmail_AttachmentPreviewed",
+                "attachment download" => "GoogleGmail_AttachmentDownloaded",
+                "attachment link click" => "GoogleGmail_AttachmentLinkClicked",
+                "attachment save to drive" => "GoogleGmail_AttachmentSavedToDrive",
+                "link click" => "GoogleGmail_LinkClicked",
+                "delegate grant" => "GoogleGmail_DelegationChanged",
+                "fetch" => "GoogleGmail_MessagesFetched",
+                "forward" => "GoogleGmail_ForwardingRuleTriggered",
+                _ => "GoogleGmail_" + SafeOperationToken(text)
+            };
         }
-        if (family.Equals("OAuth", StringComparison.OrdinalIgnoreCase)) return "GoogleOAuth_" + SafeOperationToken(text);
-        if (family.Equals("Takeout", StringComparison.OrdinalIgnoreCase)) return "GoogleTakeout_" + SafeOperationToken(text);
+
+        if (family.Equals("OAuth", StringComparison.OrdinalIgnoreCase))
+        {
+            return key switch
+            {
+                "api call" => "GoogleOAuth_API_call",
+                "authorize" => "GoogleOAuth_Authorize",
+                "revoke" => "GoogleOAuth_Revoke",
+                _ => "GoogleOAuth_" + SafeOperationToken(text)
+            };
+        }
+
+        if (family.Equals("Takeout", StringComparison.OrdinalIgnoreCase))
+        {
+            return key switch
+            {
+                "user initiated a takeout" => "GoogleTakeout_UserInitiated",
+                "user completed a takeout" => "GoogleTakeout_UserCompleted",
+                "user downloaded a takeout" => "GoogleTakeout_UserDownloaded",
+                _ => "GoogleTakeout_" + SafeOperationToken(text)
+            };
+        }
+
+        if (family.Equals("Calendar", StringComparison.OrdinalIgnoreCase)) return "GoogleCalendar_" + SafeOperationToken(text);
+        if (family.Equals("Chat", StringComparison.OrdinalIgnoreCase)) return "GoogleChat_" + SafeOperationToken(text);
+        if (family.Equals("Meet", StringComparison.OrdinalIgnoreCase)) return "GoogleMeet_" + SafeOperationToken(text);
+        if (family.Equals("Chrome", StringComparison.OrdinalIgnoreCase)) return "GoogleChrome_" + SafeOperationToken(text);
+        if (family.Equals("Chrome Sync", StringComparison.OrdinalIgnoreCase)) return "GoogleChromeSync_" + SafeOperationToken(text);
+        if (family.Equals("Access Evaluation", StringComparison.OrdinalIgnoreCase)) return "GoogleAccessEvaluation_" + SafeOperationToken(text);
         if (family.Equals("Gemini for Workspace", StringComparison.OrdinalIgnoreCase)) return "GoogleGemini_" + SafeOperationToken(text);
         if (family.Equals("User", StringComparison.OrdinalIgnoreCase)) return "GoogleUser_" + SafeOperationToken(text);
         if (family.Equals("Device", StringComparison.OrdinalIgnoreCase)) return "GoogleDevice_" + SafeOperationToken(text);
         if (family.Equals("Vault", StringComparison.OrdinalIgnoreCase)) return "GoogleVault_" + SafeOperationToken(text);
-        return string.IsNullOrWhiteSpace(text) ? "GoogleAudit_Event" : text;
+        if (family.Equals("Admin", StringComparison.OrdinalIgnoreCase)) return "GoogleAdmin_" + SafeOperationToken(text);
+        if (family.Equals("Groups", StringComparison.OrdinalIgnoreCase)) return "GoogleGroups_" + SafeOperationToken(text);
+        if (family.Equals("Groups Enterprise", StringComparison.OrdinalIgnoreCase)) return "GoogleGroupsEnterprise_" + SafeOperationToken(text);
+        if (family.Equals("Tasks", StringComparison.OrdinalIgnoreCase)) return "GoogleTasks_" + SafeOperationToken(text);
+        if (family.Equals("Workspace Studio", StringComparison.OrdinalIgnoreCase)) return "GoogleWorkspaceStudio_" + SafeOperationToken(text);
+
+        return string.IsNullOrWhiteSpace(text) ? "GoogleAudit_Event" : "GoogleAudit_" + SafeOperationToken(text);
+    }
+
+    public static string OperationKey(string value)
+    {
+        var cleaned = Clean(value).Replace('_', ' ').Replace('-', ' ');
+        return Regex.Replace(cleaned.ToLowerInvariant(), @"\s+", " ").Trim();
     }
 
     public static string SafeOperationToken(string value)
@@ -283,6 +373,208 @@ internal static class GoogleSourceSupport
         var token = Regex.Replace(value, @"[^A-Za-z0-9]+", "_").Trim('_');
         if (token.Length > 80) token = token.Substring(0, 80);
         return string.IsNullOrWhiteSpace(token) ? "Event" : token;
+    }
+
+    public static string BuildReadableTarget(string family, IDictionary<string, string> row, IEnumerable<string>? familyFields = null)
+    {
+        var readable = FirstNonBlank(
+            Get(row, "Title"),
+            Get(row, "Subject"),
+            Get(row, "Event title"),
+            Get(row, "New task title"),
+            Get(row, "Task title"),
+            Get(row, "Room name"),
+            Get(row, "Attachment name"),
+            Get(row, "Target attachment name"),
+            Get(row, "Filename"),
+            Get(row, "FileName"),
+            Get(row, "Content name"),
+            Get(row, "Resource Name"),
+            Get(row, "App name"),
+            Get(row, "Application Name"),
+            Get(row, "Device name"),
+            Get(row, "Group email"),
+            Get(row, "Flow name"));
+        if (!string.IsNullOrWhiteSpace(readable)) return readable;
+
+        if (familyFields != null)
+        {
+            var fromFamily = Get(row, familyFields.ToArray());
+            if (!string.IsNullOrWhiteSpace(fromFamily)) return fromFamily;
+        }
+
+        return FirstNonBlank(
+            Get(row, "URL"),
+            Get(row, "Resource Url"),
+            Get(row, "Attachment URL"),
+            Get(row, "Target link url"),
+            Get(row, "Target"),
+            Get(row, "Document ID"),
+            Get(row, "Message ID"),
+            Get(row, "Event ID"),
+            Get(row, "Device ID"),
+            Get(row, "OAuth Client ID"),
+            Get(row, "Scope"));
+    }
+
+    public static string StableObjectId(IDictionary<string, string> row)
+    {
+        return FirstNonBlank(
+            Get(row, "Document ID"),
+            Get(row, "Message ID"),
+            Get(row, "Event ID"),
+            Get(row, "Task ID"),
+            Get(row, "Device ID"),
+            Get(row, "Browser ID"),
+            Get(row, "Takeout job ID"),
+            Get(row, "App ID"),
+            Get(row, "OAuth Client ID"),
+            Get(row, "Conference ID"),
+            Get(row, "Meeting code"),
+            Get(row, "Room ID"),
+            Get(row, "Matter ID"),
+            Get(row, "Flow ID"),
+            Get(row, "Run ID"),
+            Get(row, "Target"),
+            Get(row, "URL"));
+    }
+
+    public static void PromoteWorkspaceAuditFields(NormalizedEvent ev, string family, IDictionary<string, string> row, string operationRaw, string normalizedOperation, string displayTarget, string stableObjectId)
+    {
+        AddGoogleField(ev, "GoogleDisplayTarget", displayTarget);
+        AddGoogleField(ev, "GoogleTarget", displayTarget);
+        AddGoogleField(ev, "GoogleStableObjectId", stableObjectId);
+        AddGoogleField(ev, "GoogleOperationExact", FirstNonBlank(Get(row, "Event"), Get(row, "OAuth event"), Get(row, "Action"), operationRaw));
+        AddGoogleField(ev, "GoogleOperationNormalized", normalizedOperation);
+        AddGoogleField(ev, "GoogleActivityParameters", FirstNonBlank(Get(row, "Event"), Get(row, "OAuth event"), Get(row, "Action"), operationRaw));
+
+        var oldVis = Get(row, "Prior visibility", "Old publish visibility value", "Old value");
+        var newVis = Get(row, "Visibility", "New publish visibility value", "New value");
+        if (!string.IsNullOrWhiteSpace(oldVis) || !string.IsNullOrWhiteSpace(newVis))
+            ev.AdditionalFields["GoogleVisibilityChange"] = oldVis + " -> " + newVis;
+
+        AddIfPresent(ev, row, "GoogleDocumentType", "Document type");
+        AddIfPresent(ev, row, "GoogleDrive_DocumentId", "Document ID");
+        AddIfPresent(ev, row, "GoogleDrive_Title", "Title");
+        AddIfPresent(ev, row, "GoogleDrive_Owner", "Owner");
+        AddIfPresent(ev, row, "GoogleDrive_Recipients", "Recipients");
+        AddIfPresent(ev, row, "GoogleGmail_MessageId", "Message ID");
+        AddIfPresent(ev, row, "GoogleGmail_Subject", "Subject");
+        AddIfPresent(ev, row, "GoogleGmail_From", "From (Header address)", "From (Envelope)");
+        AddIfPresent(ev, row, "GoogleGmail_To", "To (Envelope)");
+        AddIfPresent(ev, row, "GoogleGmail_AttachmentName", "Attachment name", "Target attachment name");
+        AddIfPresent(ev, row, "GoogleOAuth_AppName", "App name");
+        AddIfPresent(ev, row, "GoogleOAuth_AppId", "App ID", "OAuth Client ID");
+        AddIfPresent(ev, row, "GoogleOAuth_Scope", "Scope");
+        AddIfPresent(ev, row, "GoogleOAuth_ApiName", "API name", "Product");
+        AddIfPresent(ev, row, "GoogleTakeout_ProductsRequested", "Products requested");
+        AddIfPresent(ev, row, "GoogleTakeout_Destination", "Takeout destination");
+        AddIfPresent(ev, row, "GoogleTakeout_Status", "Takeout status");
+        AddIfPresent(ev, row, "GoogleGemini_AppName", "App name");
+        AddIfPresent(ev, row, "GoogleGemini_FeatureSource", "Feature source");
+        AddIfPresent(ev, row, "GoogleGemini_Action", "Action");
+        AddIfPresent(ev, row, "GoogleDevice_Type", "Device type");
+        AddIfPresent(ev, row, "GoogleDevice_Model", "Device model");
+        AddIfPresent(ev, row, "GoogleUserAgent", "User agent", "User Agent", "User Agent String");
+        AddIfPresent(ev, row, "GoogleNetworkInfo", "Network info");
+        AddIfPresent(ev, row, "GoogleResultStatus", "Event status", "Event result", "Status", "Takeout status");
+
+        if (!string.IsNullOrWhiteSpace(displayTarget) && (displayTarget.StartsWith("http", StringComparison.OrdinalIgnoreCase) || ForensicText.IsLikelyPath(displayTarget)))
+            AddGoogleTargetFields(ev, displayTarget, "GoogleWorkspaceAuditTarget");
+    }
+
+    public static void AddIfPresent(NormalizedEvent ev, IDictionary<string, string> row, string promotedName, params string[] sourceNames)
+    {
+        var value = Get(row, sourceNames);
+        if (!string.IsNullOrWhiteSpace(value)) ev.AdditionalFields[promotedName] = value;
+    }
+
+
+    public static void AddGoogleCoreFields(
+        NormalizedEvent ev,
+        string recordType,
+        string family,
+        string actor,
+        string clientIp,
+        string userAgent,
+        string operationRaw,
+        string normalizedOperation,
+        string target,
+        string stableObjectId,
+        string timestampText,
+        string sourceEntry,
+        string sourceContainer,
+        int rowNumber)
+    {
+        AddGoogleField(ev, "GoogleRecordType", recordType);
+        AddGoogleField(ev, "GoogleSourceFamily", family);
+        AddGoogleField(ev, "GoogleActor", actor);
+        AddGoogleField(ev, "GoogleUserId", actor);
+        AddGoogleField(ev, "GoogleClientIp", clientIp);
+        AddGoogleField(ev, "GoogleUserAgent", userAgent);
+        AddGoogleField(ev, "GoogleOperationRaw", operationRaw);
+        AddGoogleField(ev, "GoogleOperationNormalized", normalizedOperation);
+        AddGoogleField(ev, "GoogleTarget", target);
+        AddGoogleField(ev, "GoogleDisplayTarget", target);
+        AddGoogleField(ev, "GoogleStableObjectId", stableObjectId);
+        AddGoogleField(ev, "GoogleCreationDateText", timestampText);
+        AddGoogleField(ev, "GoogleSourceEntry", sourceEntry);
+        AddGoogleField(ev, "GoogleSourceContainer", sourceContainer);
+        if (rowNumber > 0)
+            AddGoogleField(ev, "GoogleSourceRowNumber", rowNumber.ToString(CultureInfo.InvariantCulture));
+        ev.AdditionalFields["GoogleMasterExportSchema"] = "GoogleCloudSeparatedV1";
+    }
+
+    public static void AddGoogleField(NormalizedEvent ev, string key, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+            ev.AdditionalFields[key] = Clean(value);
+    }
+
+    public static void AddGoogleTargetFields(NormalizedEvent ev, string? target, string source)
+    {
+        target = ForensicText.TrimBinaryPathTail(Clean(target));
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        ev.ObjectPath = target;
+        ev.AdditionalFields["GoogleTarget"] = target;
+        ev.AdditionalFields["GoogleDisplayTarget"] = target;
+        ev.AdditionalFields["GoogleTargetSource"] = source;
+        ev.AdditionalFields["GoogleTargetFileName"] = ParserSupport.SafeFileName(target);
+        ev.AdditionalFields["GoogleTargetFileExtension"] = ParserSupport.SafeExtension(target);
+        ev.AdditionalFields["GoogleTargetType"] = ParserSupport.ClassifyPathOrUrl(target);
+        var driveType = ParserSupport.DetermineDriveType(target);
+        if (!string.IsNullOrWhiteSpace(driveType))
+            ev.AdditionalFields["GoogleTargetDriveType"] = driveType;
+    }
+
+    public static void AddPrefixedRawFields(NormalizedEvent ev, string prefix, IDictionary<string, string> row)
+    {
+        foreach (var kvp in row)
+        {
+            if (string.IsNullOrWhiteSpace(kvp.Key) || string.IsNullOrWhiteSpace(kvp.Value))
+                continue;
+
+            var rawKey = prefix + "_" + SafeRawFieldToken(kvp.Key);
+            var candidate = rawKey;
+            var suffix = 2;
+            while (ev.AdditionalFields.ContainsKey(candidate))
+            {
+                candidate = rawKey + "_" + suffix.ToString(CultureInfo.InvariantCulture);
+                suffix++;
+            }
+            ev.AdditionalFields[candidate] = kvp.Value ?? string.Empty;
+        }
+    }
+
+    public static string SafeRawFieldToken(string value)
+    {
+        value = Clean(value);
+        if (string.IsNullOrWhiteSpace(value)) return "Field";
+        var token = Regex.Replace(value, @"[^A-Za-z0-9]+", "_").Trim('_');
+        if (token.Length > 120) token = token.Substring(0, 120);
+        return string.IsNullOrWhiteSpace(token) ? "Field" : token;
     }
 
     public static void AddGoogleRiskFields(NormalizedEvent ev, string family, IDictionary<string, string> row)
@@ -328,6 +620,14 @@ internal static class GoogleSourceSupport
     {
         var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
         if (p.Contains("mail/user settings")) return "Mail User Settings";
+        if (p.Contains("google chat/") || p.EndsWith("/messages.json", StringComparison.OrdinalIgnoreCase)) return "Google Chat";
+        if (p.Contains("google meet/conferencehistory") || p.Contains("conference_history_records.csv")) return "Meet Conference History";
+        if (p.Contains("calendar/") || p.EndsWith(".ics", StringComparison.OrdinalIgnoreCase)) return "Calendar";
+        if (p.Contains("notebooklm/")) return "NotebookLM";
+        if (p.Contains("my activity/gemini") || p.Contains("gemini/") || p.Contains("gemini apps")) return "Gemini";
+        if (p.Contains("my activity/drive")) return "Drive My Activity";
+        if (p.Contains("my activity/takeout")) return "Takeout My Activity";
+        if (p.Contains("my activity/")) return "My Activity";
         if (p.Contains("youtube") || p.Contains("youtube music")) return "YouTube and YouTube Music";
         if (p.Contains("devices - a list of devices")) return "Devices";
         if (p.Contains("activities - a list of google services")) return "Activities";

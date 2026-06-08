@@ -1,18 +1,18 @@
-# Build Notes - Vestigant Triage v3.4.3
+# Build Notes - Vestigant Triage v3.6.3.1
 
-v3.4.3 fixes the v3.4.0 compile failure in `Parsers\ParserRegistry.cs` caused by an invalid C# backslash character literal. It also introduces the root `ai_context.md` living project context file.
+v3.6.3.1 is a Google cloud-schema separation and validation hardening build. It preserves the v3.5.0 Google readability improvements, but moves Google raw/source metadata into Google-prefixed fields so Google cloud evidence is not mixed into endpoint/O365-specific metadata columns.
 
-## Commands
+## Windows validation command
 
 ```powershell
 Set-Location D:\Downloads
-Get-FileHash .\VestigantTriage_v3_4_3_google_framework_build_fix.zip -Algorithm SHA256
-Expand-Archive -LiteralPath .\VestigantTriage_v3_4_3_google_framework_build_fix.zip -DestinationPath T:\ -Force
-& "T:\VestigantTriage_v3_4_3\RUN_DEFAULT_IMAGE_TRIAGE.ps1"
+Get-FileHash .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -Algorithm SHA256
+Expand-Archive -LiteralPath .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -DestinationPath T:\ -Force
+& "T:\VestigantTriage_v3_6_3_1\RUN_GOOGLE_SOURCE_TRIAGE.ps1" -GoogleRoot "E:\0445_0001"
 ```
 
 Expected upload:
 
 ```text
-D:\Downloads\Upload_VestigantTriage_v3_4_3_*.zip
+D:\Downloads\Upload_VestigantTriage_v3_6_3_1_*.zip
 ```

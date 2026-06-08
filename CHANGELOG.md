@@ -1,4 +1,70 @@
-# Changelog
+# CHANGELOG
+
+## v3.7.0 - Google Takeout/Gemini content expansion
+
+- Expanded Google Takeout ingestion based on uploaded sample archives rather than assumptions.
+- Added Takeout My Activity HTML promotion for Gemini Apps, Drive, Takeout, and other My Activity HTML exports with timestamp extraction.
+- Added Google Chat `messages.json` promotion to message-level events with creator, message ID, topic ID, message text preview, and first URL metadata.
+- Added Google Meet `conference_history_records.csv` promotion to meeting-participation events with meeting code, conference ID, start/end, duration, and participation state.
+- Added Google Calendar `.ics` VEVENT promotion to calendar events with title, UID, start/end, organizer, and location metadata.
+- Added nested Takeout ZIP inventory and bounded nested parsing for nested Takeout archives.
+- Improved Gemini session archive parsing by extracting text previews and risk-term summaries from transcript/code text artifacts while preserving screenshots/PDFs as metadata-only inventory.
+- Updated Google source family classification, headless Google candidate discovery, validation assertions, ai_context.md, and PowerShell test commands for v3.7.0.
+
+## v3.7.0 - Release-script version assertion hotfix
+
+- Fixed `tools/Create-TriageUploadBundle.ps1` default `$Version` token from stale `3_6_3` to current `3_7_0`.
+- Added/kept build-validation checks requiring the upload-bundle default version to match the current package before packaging.
+- Added wrapper-safety assertions requiring Google thin-test PowerShell to use splatted named parameters and not fragile positional runner argument arrays.
+- Documented the repeated release-blocking failure pattern in `ai_context.md` so future package generation must review version strings, wrapper scripts, and runnable PowerShell commands together.
+
+## v3.6.3.1 - Google thin-test wrapper argument-binding hotfix
+
+- Fixed `RUN_GOOGLE_THIN_TEST_V3_6_3_1.ps1` to call `RUN_GOOGLE_SOURCE_TRIAGE.ps1` with hashtable splatting instead of array argument forwarding, preventing literal parameter names such as `-GoogleRoot` from being bound as path values.
+- Added phase-based `headless_google_run_status.txt` updates for Google source runs, including discovery, ingest, risk, validation export, and completion phases.
+- Added risk-engine progress logging every 10,000 events or 60 seconds, plus explicit logs before and after baseline, sequence, persistence, and score-update phases.
+- Updated `RUN_GOOGLE_SOURCE_TRIAGE.ps1` to monitor the headless process and emit heartbeat snapshots with process memory, CPU seconds, case database size, status fields, and recent headless log lines.
+- Added `RUN_GOOGLE_THIN_TEST_V3_6_3_1.ps1`, which skips risk by default for thin validation unless `-IncludeRisk` is supplied.
+- Preserved the v3.6.2 Google metadata-storage hotfix behavior; no Google parser semantic change was intended.
+
+## v3.6.2 - Google metadata storage size hotfix
+
+- Narrow hotfix for the v3.6.x Google schema-separation storage expansion observed during thin testing, where `case.db` grew beyond the prior v3.4.4 case size and `event_fields` plus value indexes dominated database size.
+- Added non-indexed `google_event_raw_fields` storage for `GoogleAuditRaw_*` and `GoogleTakeoutRaw_*` source columns so raw Google source columns remain preserved without inflating the globally indexed `event_fields` table.
+- Kept reviewed Google canonical fields in `event_fields`, but skipped Google fields that merely duplicate normalized `events` table columns, skipped `GoogleRawSerializedRow` because it is already stored in `events.raw_json`, skipped `GoogleMasterExportSchema`, and skipped negative/default `GoogleRisk* = No` flags.
+- Replaced broad global value indexes on `event_fields(field_value)` and `event_fields(field_name, field_value)` with a smaller `event_fields(field_name)` index while preserving the existing `(event_id, field_name)` lookup index.
+- Updated Google validation exports so unmapped/raw Google source-column review reads from `google_event_raw_fields` and added `vestigant_google_metadata_storage_summary.csv` with event, metadata, raw-field, and average fields-per-event metrics.
+- No Google parser routing, risk-rule mapping, Master export preferred-header restriction, GUI behavior, or non-Google parser behavior was intentionally changed.
+
+## v3.6.1 - DatabaseIngest build fix after Google schema separation
+
+- Fixed a build failure in `Core/DatabaseIngest.cs` where the v3.6.0 patch truncated the file after `if (rowCount % 10000 == 0)`.
+- Restored the import progress logging, transaction commit, ingest result return, and helper methods from the prior working implementation while preserving the v3.6.0 Google schema-separation logic above the insert path.
+- Added a build-validation assertion to detect the `DatabaseIngest.cs` import-completion marker so this truncation does not recur silently.
+- Updated `ai_context.md` with the v3.6.0 build failure and Graveyard note.
+- No Google parser, risk-rule, Master export, validation-bundle schema, or UI behavior was intentionally changed.
+
+## v3.6.0 - Google cloud schema separation and validation hardening
+
+- Reviewed the user-supplied Google review note that warned against shoehorning cloud audit and Takeout fields into endpoint/O365-style buckets.
+- Preserved the v3.5.0 Google readability improvements while separating Google Workspace Audit, Google Takeout, and Gemini metadata into Google-prefixed fields.
+- Google raw source columns are now stored as `GoogleAuditRaw_*` or `GoogleTakeoutRaw_*` metadata instead of unprefixed fields such as `Title`, `Event`, `Description`, `IP Address`, or `User Agent`.
+- Added canonical Google fields such as `GoogleRecordType`, `GoogleSourceFamily`, `GoogleActor`, `GoogleClientIp`, `GoogleUserAgent`, `GoogleOperationRaw`, `GoogleOperationNormalized`, `GoogleTarget`, `GoogleStableObjectId`, and `GoogleRawSerializedRow`.
+- Updated Workspace Audit promotion to use Google-prefixed names such as `GoogleActivityParameters`, `GoogleVisibilityChange`, `GoogleDocumentType`, `GoogleDrive_Title`, `GoogleGmail_Subject`, `GoogleOAuth_Scope`, and `GoogleGemini_Action`.
+- Updated Takeout and Gemini parsers so product/archive/session metadata is retained under Google-prefixed names while the normalized event still has enough generic fields for timeline ordering, search, and risk correlation.
+- Updated Master metadata export so Google rows do not populate the full preferred O365/endpoint header set. Only limited universal columns are filled; cloud-specific values remain in appended Google-prefixed metadata and `Vestigant_*` database columns.
+- Added `vestigant_google_field_collision_review.csv` to the validation bundle so any remaining Google rows that populate collision-prone generic metadata fields are visible and reviewable.
+- Updated ingest logic to respect parser-supplied `IsBehavioralTimestamp` and `TimestampWarning` values instead of deriving behavior solely from the presence of a timestamp.
+- Updated `ai_context.md` with the Google schema-separation decision and new Graveyard entries.
+
+## v3.4.4 - Google fast-test MBOX exclusion
+
+- Updated headless Google source discovery so `.mbox` files are excluded by default for fast Google parser validation.
+- Added `--include-mbox` support in the executable and `-IncludeMbox` support in `RUN_GOOGLE_SOURCE_TRIAGE.ps1` for later intentional MBOX testing.
+- Added `mbox_included=` to `headless_google_run_status.txt` so review bundles show whether large Mail/MBOX sources were included.
+- Added log messages for skipped MBOX files so the omission is explicit, reviewable, and not confused with parser miss coverage.
+- Updated build validation and `ai_context.md` for the MBOX test-scope decision.
+- No Google audit CSV, Takeout ZIP/JSON/CSV, Gemini, risk-engine, or Master metadata export behavior was otherwise intentionally changed.
 
 ## v3.4.3 - Google source headless automation
 

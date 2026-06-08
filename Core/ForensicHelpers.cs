@@ -32,11 +32,39 @@ internal static class TimeUtil
         if (string.IsNullOrWhiteSpace(dateStr))
             return null;
 
-        if (DateTimeOffset.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
-            return dto.UtcDateTime;
+        var text = dateStr.Trim();
+        var candidates = new List<string> { text };
+        if (text.EndsWith(" UTC", StringComparison.OrdinalIgnoreCase))
+            candidates.Add(text[..^4].TrimEnd() + "Z");
+        if (text.EndsWith(" GMT", StringComparison.OrdinalIgnoreCase))
+            candidates.Add(text[..^4].TrimEnd() + "Z");
 
-        if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt))
-            return dt.ToUniversalTime();
+        string[] exactFormats =
+        {
+            "yyyy-MM-dd HH:mm:ss 'UTC'",
+            "yyyy-MM-dd HH:mm:ss'UTC'",
+            "yyyy-MM-dd HH:mm:ss zzz",
+            "yyyy-MM-ddTHH:mm:ssK",
+            "yyyy-MM-ddTHH:mm:ss.FFFFFFFK",
+            "yyyy-MM-dd HH:mm:ss",
+            "M/d/yyyy h:mm:ss tt",
+            "M/d/yyyy H:mm:ss"
+        };
+
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (DateTimeOffset.TryParseExact(candidate, exactFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var exactDto))
+                return exactDto.UtcDateTime;
+
+            if (DateTimeOffset.TryParse(candidate, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
+                return dto.UtcDateTime;
+
+            if (DateTime.TryParseExact(candidate, exactFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var exactDt))
+                return DateTime.SpecifyKind(exactDt, DateTimeKind.Utc).ToUniversalTime();
+
+            if (DateTime.TryParse(candidate, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt))
+                return dt.ToUniversalTime();
+        }
 
         return null;
     }

@@ -8,13 +8,14 @@ param(
     [switch]$SkipIngest,
     [switch]$SkipRisk,
     [switch]$HashGoogleSources,
+    [switch]$IncludeMbox,
     [switch]$CleanCase,
     [switch]$ReuseCase
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
-$Version = "3.4.3"
+$Version = "3.7.0"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
 function Assert-PathIsNotPlaceholder {
@@ -56,6 +57,52 @@ function Invoke-ExecutableAndWait {
     Write-RunLog "Process exit code: $exitCode"
     if ($exitCode -ne 0) { throw "$FailureMessage ExitCode=$exitCode. See $script:RunLog" }
 }
+
+function Write-GoogleProgressSnapshot {
+    param([string]$CaseRoot, [string]$StatusPath, [string]$HeadlessLog, [System.Diagnostics.Process]$Process)
+    try {
+        $cpu = if ($null -ne $Process -and -not $Process.HasExited) { [math]::Round($Process.CPU, 1) } else { 0 }
+        $workMb = if ($null -ne $Process -and -not $Process.HasExited) { [math]::Round($Process.WorkingSet64 / 1MB, 1) } else { 0 }
+        $dbPath = Join-Path $CaseRoot "case.db"
+        $dbMb = if (Test-Path -LiteralPath $dbPath -PathType Leaf) { [math]::Round((Get-Item -LiteralPath $dbPath).Length / 1MB, 1) } else { 0 }
+        Write-RunLog "Heartbeat: process_id=$($Process.Id) cpu_seconds=$cpu working_set_mb=$workMb case_db_mb=$dbMb"
+        if (Test-Path -LiteralPath $StatusPath -PathType Leaf) {
+            $status = Get-Content -LiteralPath $StatusPath -ErrorAction SilentlyContinue
+            foreach ($line in $status) {
+                if ($line -match '^(status|phase|updated_utc|source_count|candidate_sources|risk_processed|risk_total|risk_hits_so_far|risk_status|validation_bundle_status)=') {
+                    Write-RunLog "HeartbeatStatus: $line"
+                }
+            }
+        }
+        if (Test-Path -LiteralPath $HeadlessLog -PathType Leaf) {
+            $tail = @(Get-Content -LiteralPath $HeadlessLog -Tail 5 -ErrorAction SilentlyContinue)
+            foreach ($line in $tail) { Write-RunLog "HeartbeatHeadlessTail: $line" }
+        }
+    } catch {
+        Write-RunLog "WARN: heartbeat snapshot failed: $($_.Exception.Message)"
+    }
+}
+function Invoke-ExecutableAndMonitor {
+    param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory, [string]$FailureMessage, [string]$CaseRoot, [string]$StatusPath, [string]$HeadlessLog)
+    $argumentText = Join-ProcessArguments -Arguments $Arguments
+    Write-RunLog "Start-Process monitored: `"$FilePath`" $argumentText"
+    $process = Start-Process -FilePath $FilePath -ArgumentList $argumentText -WorkingDirectory $WorkingDirectory -PassThru
+    $lastHeartbeat = Get-Date
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds 10
+        $now = Get-Date
+        if (($now - $lastHeartbeat).TotalSeconds -ge 60) {
+            $lastHeartbeat = $now
+            Write-GoogleProgressSnapshot -CaseRoot $CaseRoot -StatusPath $StatusPath -HeadlessLog $HeadlessLog -Process $process
+        }
+        try { $process.Refresh() } catch { }
+    }
+    Write-GoogleProgressSnapshot -CaseRoot $CaseRoot -StatusPath $StatusPath -HeadlessLog $HeadlessLog -Process $process
+    $exitCode = if ($null -ne $process.ExitCode) { [int]$process.ExitCode } else { 0 }
+    Write-RunLog "Process exit code: $exitCode"
+    if ($exitCode -ne 0) { throw "$FailureMessage ExitCode=$exitCode. See $script:RunLog" }
+}
+
 function Write-GoogleFailureDiagnostics {
     param([string]$StatusPath, [string]$HeadlessLog)
     Write-RunLog "Collecting Google headless failure diagnostics."
@@ -86,7 +133,7 @@ if (-not (Test-Path -LiteralPath $CaseBaseRoot -PathType Container)) {
 }
 if ([string]::IsNullOrWhiteSpace($CaseRoot)) {
     if ([string]::IsNullOrWhiteSpace($CaseName)) {
-        $CaseName = "V3_4_3_Google_0445_0001_$Stamp"
+        $CaseName = "V3_7_0_Google_0445_0001_$Stamp"
     }
     $CaseRoot = Join-Path $CaseBaseRoot $CaseName
 }
@@ -105,8 +152,8 @@ New-Item -ItemType Directory -Force -Path $CaseRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $CaseRoot "Upload") | Out-Null
 if ([string]::IsNullOrWhiteSpace($OutZip)) {
     $safeCase = ($CaseName -replace '[^A-Za-z0-9._-]', '_').Trim('_','.')
-    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_4_3_GoogleSourceTriage_$Stamp" }
-    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_4_3_$safeCase.zip"
+    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_7_0_GoogleSourceTriage_$Stamp" }
+    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_7_0_$safeCase.zip"
 }
 
 $script:RunLog = Join-Path $CaseRoot "Upload\RUN_GOOGLE_SOURCE_TRIAGE_$Stamp.log"
@@ -121,6 +168,8 @@ Write-RunLog "CaseRoot: $CaseRoot"
 Write-RunLog "CaseName: $CaseName"
 Write-RunLog "OutZip: $OutZip"
 Write-RunLog "HashGoogleSources: $($HashGoogleSources.IsPresent)"
+Write-RunLog "IncludeMbox: $($IncludeMbox.IsPresent)"
+Write-RunLog "SkipRisk: $($SkipRisk.IsPresent)"
 
 if (-not $SkipBuild) {
     Write-RunLog "Running build/validation/publish script."
@@ -143,12 +192,13 @@ $HeadlessArgs = @(
 if ($SkipIngest) { $HeadlessArgs += "--skip-ingest" }
 if ($SkipRisk) { $HeadlessArgs += "--skip-risk" }
 if ($HashGoogleSources) { $HeadlessArgs += "--hash-google-sources" }
+if ($IncludeMbox) { $HeadlessArgs += "--include-mbox" }
 
 Write-RunLog "Starting headless Google source triage run."
 Write-RunLog "Command: `"$Exe`" $($HeadlessArgs -join ' ')"
 $ExeDir = Split-Path -Parent $Exe
 try {
-    Invoke-ExecutableAndWait -FilePath $Exe -Arguments $HeadlessArgs -WorkingDirectory $ExeDir -FailureMessage "Headless Google source triage failed."
+    Invoke-ExecutableAndMonitor -FilePath $Exe -Arguments $HeadlessArgs -WorkingDirectory $ExeDir -FailureMessage "Headless Google source triage failed." -CaseRoot $CaseRoot -StatusPath (Join-Path $CaseRoot "Upload\headless_google_run_status.txt") -HeadlessLog $HeadlessLog
 } catch {
     Write-GoogleFailureDiagnostics -StatusPath (Join-Path $CaseRoot "Upload\headless_google_run_status.txt") -HeadlessLog $HeadlessLog
     throw

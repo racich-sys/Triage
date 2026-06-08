@@ -225,12 +225,32 @@ internal static class HeadlessTriageRunner
                 try { Console.WriteLine(line); } catch { }
             }
 
-            File.WriteAllText(statusPath,
-                "status=started" + Environment.NewLine +
-                "version=" + AppInfo.Version + Environment.NewLine +
-                "case_root=" + caseRoot + Environment.NewLine +
-                "google_root=" + googleRoot + Environment.NewLine +
-                "started_utc=" + DateTime.UtcNow.ToString("O") + Environment.NewLine);
+            var runStartedUtc = DateTime.UtcNow;
+            void WriteGoogleStatus(string status, string phase, string extra = "")
+            {
+                try
+                {
+                    var lines = new List<string>
+                    {
+                        "status=" + status,
+                        "version=" + AppInfo.Version,
+                        "phase=" + phase,
+                        "case_root=" + caseRoot,
+                        "google_root=" + googleRoot,
+                        "started_utc=" + runStartedUtc.ToString("O"),
+                        "updated_utc=" + DateTime.UtcNow.ToString("O")
+                    };
+                    if (!string.IsNullOrWhiteSpace(extra))
+                    {
+                        foreach (var part in extra.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                            lines.Add(part);
+                    }
+                    File.WriteAllText(statusPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
+                }
+                catch { }
+            }
+
+            WriteGoogleStatus("started", "initializing");
 
             Log($"Starting {AppInfo.DisplayName} headless Google source triage run.");
             Log($"GoogleRoot: {googleRoot}");
@@ -241,9 +261,15 @@ internal static class HeadlessTriageRunner
             var dbPath = Path.Combine(caseRoot, "case.db");
             var hashSources = HasFlag(options, "hash-google-sources");
             var skipRisk = HasFlag(options, "skip-risk");
-            var candidateFiles = FindGoogleSourceCandidates(googleRoot, Log).ToList();
+            var includeMbox = HasFlag(options, "include-mbox");
+            Log(includeMbox
+                ? "Google source discovery: MBOX files are included for this run."
+                : "Google source discovery: MBOX files are excluded by default for fast Google parser validation. Re-run with --include-mbox when MBOX testing is intended.");
+            WriteGoogleStatus("running", "discovering_sources");
+            var candidateFiles = FindGoogleSourceCandidates(googleRoot, includeMbox, Log).ToList();
+            WriteGoogleStatus("running", "sources_discovered", "candidate_sources=" + candidateFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             if (candidateFiles.Count == 0)
-                throw new InvalidOperationException("No candidate Google source files were found. Expected Google audit/takeout/Gemini ZIP/CSV/JSON/HTML/MBOX files.");
+                throw new InvalidOperationException("No candidate Google source files were found. Expected Google audit/takeout/Gemini ZIP/CSV/JSON/HTML files; MBOX files are excluded unless --include-mbox is supplied.");
 
             var model = new CaseFile
             {
@@ -281,15 +307,19 @@ internal static class HeadlessTriageRunner
             CaseManager.Save(casePath, model);
             Log($"Case saved before ingest: {casePath}");
 
+            WriteGoogleStatus("running", "initializing_database", "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             DatabaseCore.InitializeDatabase(dbPath);
             if (!HasFlag(options, "skip-ingest"))
             {
+                WriteGoogleStatus("running", "ingesting_sources", "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 IngestEngine.ProcessEvidence(dbPath, model.Sources, TimeZoneInfo.Local.Id, Log);
                 CaseManager.Save(casePath, model);
+                WriteGoogleStatus("running", "ingest_complete", "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 Log("Case saved after Google source ingest.");
             }
             else
             {
+                WriteGoogleStatus("running", "ingest_skipped", "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 Log("skip-ingest was supplied. Google sources were indexed in the case, but parser ingest was not run.");
             }
 
@@ -298,16 +328,26 @@ internal static class HeadlessTriageRunner
             {
                 try
                 {
-                    var risk = RiskEngine.Run(dbPath, null, Log);
+                    WriteGoogleStatus("running", "risk_starting");
+                    var risk = RiskEngine.Run(dbPath, null, Log, (processed, total, hits) =>
+                    {
+                        WriteGoogleStatus("running", "risk_running", "risk_processed=" + processed.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine + "risk_total=" + total.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine + "risk_hits_so_far=" + hits.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    });
                     riskStatus = $"complete:{risk.TotalHits}";
+                    WriteGoogleStatus("running", "risk_complete", "risk_hits=" + risk.TotalHits.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     Log($"Risk engine completed. Hits: {risk.TotalHits:N0}.");
                 }
                 catch (Exception riskEx)
                 {
                     riskStatus = "failed:" + SanitizeLogLine(riskEx.Message);
+                    WriteGoogleStatus("running", "risk_failed", "risk_error=" + SanitizeLogLine(riskEx.Message));
                     Log("WARN: Risk engine failed after Google ingest. " + SanitizeLogLine(riskEx.Message));
                     TryWriteText(Path.Combine(caseRoot, "Upload", "google_risk_error.txt"), riskEx.ToString());
                 }
+            }
+            else
+            {
+                WriteGoogleStatus("running", skipRisk ? "risk_skipped" : "risk_not_run", "risk_status=" + riskStatus);
             }
 
             var validationBundleStatus = "skipped";
@@ -317,14 +357,17 @@ internal static class HeadlessTriageRunner
                 var validationZip = Path.Combine(caseRoot, "Upload", SanitizeFileName(caseName) + "_validation_bundle.zip");
                 try
                 {
+                    WriteGoogleStatus("running", "validation_export_starting", "risk_status=" + riskStatus);
                     var result = ValidationBundleService.ExportValidationBundle(validationZip, model, caseRoot, dbPath, Log);
                     validationBundleStatus = "exported";
+                    WriteGoogleStatus("running", "validation_export_complete", "risk_status=" + riskStatus + Environment.NewLine + "validation_bundle_bytes=" + result.ZipBytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     Log($"Validation bundle exported: {result.ZipPath} ({result.ZipBytes:N0} bytes). ");
                 }
                 catch (Exception validationEx)
                 {
                     validationBundleStatus = "failed";
                     validationBundleError = SanitizeLogLine(validationEx.Message);
+                    WriteGoogleStatus("running", "validation_export_failed", "risk_status=" + riskStatus + Environment.NewLine + "validation_bundle_error=" + validationBundleError);
                     Log("WARN: Validation bundle export failed after Google ingest; wrapper fallback may attempt standalone export. " + validationBundleError);
                     TryWriteText(Path.Combine(caseRoot, "Upload", "validation_bundle_export_error.txt"), validationEx.ToString());
                 }
@@ -333,14 +376,17 @@ internal static class HeadlessTriageRunner
             File.WriteAllText(statusPath,
                 "status=complete" + Environment.NewLine +
                 "version=" + AppInfo.Version + Environment.NewLine +
+                "phase=complete" + Environment.NewLine +
                 "case_root=" + caseRoot + Environment.NewLine +
                 "case_json=" + casePath + Environment.NewLine +
                 "case_db=" + dbPath + Environment.NewLine +
                 "google_root=" + googleRoot + Environment.NewLine +
                 "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
+                "mbox_included=" + includeMbox.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
                 "risk_status=" + riskStatus + Environment.NewLine +
                 "validation_bundle_status=" + validationBundleStatus + Environment.NewLine +
                 "validation_bundle_error=" + validationBundleError + Environment.NewLine +
+                "updated_utc=" + DateTime.UtcNow.ToString("O") + Environment.NewLine +
                 "completed_utc=" + DateTime.UtcNow.ToString("O") + Environment.NewLine);
 
             Log("Headless Google source triage run complete.");
@@ -419,11 +465,11 @@ internal static class HeadlessTriageRunner
     }
 
 
-    private static IEnumerable<string> FindGoogleSourceCandidates(string root, Action<string> log)
+    private static IEnumerable<string> FindGoogleSourceCandidates(string root, bool includeMbox, Action<string> log)
     {
         if (File.Exists(root))
         {
-            if (IsGoogleSourceCandidate(root)) yield return Path.GetFullPath(root);
+            if (IsGoogleSourceCandidate(root, includeMbox, log)) yield return Path.GetFullPath(root);
             yield break;
         }
 
@@ -441,13 +487,13 @@ internal static class HeadlessTriageRunner
         foreach (var file in files)
         {
             bool include;
-            try { include = IsGoogleSourceCandidate(file); }
+            try { include = IsGoogleSourceCandidate(file, includeMbox, log); }
             catch { include = false; }
             if (include) yield return Path.GetFullPath(file);
         }
     }
 
-    private static bool IsGoogleSourceCandidate(string path)
+    private static bool IsGoogleSourceCandidate(string path, bool includeMbox, Action<string>? log = null)
     {
         var lower = path.Replace('\\', '/').ToLowerInvariant();
         var name = Path.GetFileName(lower) ?? string.Empty;
@@ -462,11 +508,19 @@ internal static class HeadlessTriageRunner
         if (ext == ".json")
             return lower.Contains("takeout") || lower.Contains("google") || lower.Contains("filters.json") || lower.Contains("blocked addresses.json") || lower.Contains("vacation responder.json") || lower.Contains("gemini");
 
-        if (ext == ".html" || ext == ".htm" || ext == ".rtf" || ext == ".txt" || ext == ".pdf" || ext == ".png" || ext == ".jpg" || ext == ".jpeg")
-            return lower.Contains("takeout") || lower.Contains("google") || lower.Contains("gemini");
+        if (ext == ".html" || ext == ".htm" || ext == ".rtf" || ext == ".txt" || ext == ".pdf" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".ics")
+            return lower.Contains("takeout") || lower.Contains("google") || lower.Contains("gemini") || lower.Contains("calendar");
 
         if (ext == ".mbox")
-            return lower.Contains("mail") || lower.Contains("takeout") || lower.Contains("google");
+        {
+            var isGoogleMbox = lower.Contains("mail") || lower.Contains("takeout") || lower.Contains("google");
+            if (isGoogleMbox && !includeMbox)
+            {
+                log?.Invoke("Skipping MBOX source for fast Google test: " + Path.GetFileName(path));
+                return false;
+            }
+            return isGoogleMbox;
+        }
 
         return false;
     }

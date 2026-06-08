@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,7 +16,7 @@ internal static class RiskEngine
         return LoadConfiguration(dbPath, _ => { });
     }
 
-    public static RiskRunResult Run(string dbPath, HashSet<string>? selectedRuleCodes, Action<string> log)
+    public static RiskRunResult Run(string dbPath, HashSet<string>? selectedRuleCodes, Action<string> log, Action<int, int, int>? progress = null)
     {
         if (!File.Exists(dbPath))
             throw new FileNotFoundException("SQLite database not found.", dbPath);
@@ -44,13 +45,27 @@ internal static class RiskEngine
         log($"Loaded {events.Count:N0} events for risk analysis");
         log($"Risk profile: {config.Name} (v{config.Version})");
 
+        var sw = Stopwatch.StartNew();
+        log("Risk phase: building user/IP baselines.");
         var userIpBaselines = BuildUserIpBaselines(events, config);
+        log($"Risk phase complete: user/IP baselines in {sw.Elapsed.TotalSeconds:N1}s.");
+        log("Risk phase: building 30-minute operation burst indexes.");
         var userDownloadBursts = BuildOperationBursts(events, new[] { "FileDownloaded" });
         var userMailboxBursts = BuildOperationBursts(events, new[] { "MailItemsAccessed" });
         var userDeleteBursts = BuildOperationBursts(events, new[] { "MoveToDeletedItems", "HardDelete", "FileDeleted", "File_Delete" });
+        log($"Risk phase complete: operation burst indexes in {sw.Elapsed.TotalSeconds:N1}s.");
 
+        var processed = 0;
+        var lastProgress = DateTime.UtcNow;
         foreach (var ev in events)
         {
+            processed++;
+            if (processed == 1 || processed % 10000 == 0 || processed == events.Count || (DateTime.UtcNow - lastProgress).TotalSeconds >= 60)
+            {
+                lastProgress = DateTime.UtcNow;
+                log($"Risk progress: evaluated {processed:N0}/{events.Count:N0} events; hits_so_far={hits.Count:N0}; elapsed={sw.Elapsed.TotalSeconds:N1}s.");
+                progress?.Invoke(processed, events.Count, hits.Count);
+            }
             var recipients = FirstNonBlank(ev.EmailTo, ev.Recipients);
             var behaviorBucket = ev.IsBehavioralTimestamp ? Bucket30(ev.CreationDateUtc) : string.Empty;
             var downloadBucket = !string.IsNullOrEmpty(behaviorBucket) && userDownloadBursts.TryGetValue((ev.UserId, behaviorBucket), out var dlCount) ? dlCount : 0;
@@ -124,7 +139,7 @@ internal static class RiskEngine
             var executionOrCommand = (ev.DataSource == "Prefetch" || ev.DataSource == "Registry_UserAssist" || ev.DataSource == "Registry_BAM" || ev.DataSource == "Registry_DAM" || ev.DataSource == "AmCache" || ev.DataSource == "PowerShell_History" || ev.DataSource == "PowerShell_Transcript" || (ev.DataSource == "WinEventLog" && ev.Operation.Contains("PowerShell", StringComparison.OrdinalIgnoreCase))) && ContainsKeyword(config.TransferTools, executionText);
             AddIfRule(hits, config, "EXF-090", ev, executionOrCommand, "Transfer, sync, or command-line data movement tool observed.", executionText);
 
-            var googleText = FirstNonBlank(ev.ObjectId, ev.SourceRelativeUrl, ev.PathHint, ev.FileName, ev.EmailSubject, ev.RawJson, ev.Operation);
+            var googleText = string.Join(" ", new[] { ev.Operation, ev.ObjectId, ev.SourceRelativeUrl, ev.PathHint, ev.FileName, ev.EmailSubject, ev.RawJson }.Where(v => !string.IsNullOrWhiteSpace(v)));
             var isGoogleSource = ev.DataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase);
             var isGoogleDrive = isGoogleSource && (ev.DataSource.Contains("Drive", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleDrive", StringComparison.OrdinalIgnoreCase));
             var isGoogleGmail = isGoogleSource && (ev.DataSource.Contains("Gmail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleGmail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Equals("MailItemsAccessed", StringComparison.OrdinalIgnoreCase));
@@ -133,8 +148,8 @@ internal static class RiskEngine
             var isGoogleGemini = isGoogleSource && (ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleGemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GeminiSession", StringComparison.OrdinalIgnoreCase));
             var isGoogleVaultOrAdmin = isGoogleSource && (ev.DataSource.Contains("Vault", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Admin", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleVault", StringComparison.OrdinalIgnoreCase));
             AddIfRule(hits, config, "EXF-091", ev, isGoogleTakeout && ContainsAny(googleText, "request", "download", "created", "completed", "export", "destination", "takeout"), "Google Takeout request/export/download-related evidence observed.", googleText);
-            AddIfRule(hits, config, "EXF-092", ev, isGoogleDrive && ContainsAny(googleText, "download", "export", "share", "visibility", "external", "link", "copy"), "Google Drive download/export/share/visibility/copy event observed.", googleText);
-            AddIfRule(hits, config, "EXF-093", ev, isGoogleGmail && ContainsAny(googleText, "attachment", "forward", "delegate", "routing", "send", "download", "access"), "Google Gmail access/attachment/forwarding/delegation/routing event observed.", googleText);
+            AddIfRule(hits, config, "EXF-092", ev, isGoogleDrive && ContainsAny(googleText, "download", "export", "share", "sharing", "visibility", "external", "link", "copy", "access scope", "accessscope", "UserSharingPermissions", "VisibilityChanged"), "Google Drive download/export/share/visibility/access-scope event observed.", googleText);
+            AddIfRule(hits, config, "EXF-093", ev, isGoogleGmail && ContainsAny(googleText, "attachment", "forward", "delegate", "routing", "send", "download", "content accessed", "MessageContentAccessed", "AttachmentDownloaded", "AttachmentSavedToDrive"), "Google Gmail attachment/content/forwarding/delegation/routing event observed.", googleText);
             AddIfRule(hits, config, "EXF-094", ev, isGoogleOAuth && ContainsAny(googleText, "drive", "gmail", "calendar", "contacts", "scope", "api", "token"), "Google OAuth/API grant or activity involving data-bearing services observed.", googleText);
             AddIfRule(hits, config, "ACC-031", ev, isGoogleSource && (ev.DataSource.Contains("User", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Device", StringComparison.OrdinalIgnoreCase)) && ContainsAny(googleText, "suspicious", "failed", "new device", "challenge", "login", "compromised"), "Google login/device/user event relevant to access review observed.", googleText);
             AddIfRule(hits, config, "CON-082", ev, isGoogleVaultOrAdmin && ContainsAny(googleText, "vault", "hold", "retention", "delete", "remove", "purge", "suspend", "reset", "wipe", "rule", "setting"), "Google Vault/Admin control event relevant to preservation, deletion, or account-control review observed.", googleText);
@@ -142,11 +157,21 @@ internal static class RiskEngine
 
         }
 
-        hits.AddRange(DetectSequences(events, config));
+        log($"Risk phase complete: per-event rules evaluated for {events.Count:N0} events in {sw.Elapsed.TotalSeconds:N1}s; hits_before_sequences={hits.Count:N0}.");
+        log("Risk phase: detecting multi-event sequences.");
+        var sequenceHits = DetectSequences(events, config);
+        log($"Risk phase complete: sequence detection produced {sequenceHits.Count:N0} hits in {sw.Elapsed.TotalSeconds:N1}s.");
+        hits.AddRange(sequenceHits);
+        log("Risk phase: deduplicating risk hits.");
         hits = DeduplicateHits(hits);
+        log($"Risk phase complete: deduplicated risk hits={hits.Count:N0} in {sw.Elapsed.TotalSeconds:N1}s.");
 
+        log("Risk phase: persisting risk hits.");
         ExecuteWithSqliteRetry(() => PersistHits(conn, hits), log, "persisting risk hits");
+        log($"Risk phase complete: persisted risk hits in {sw.Elapsed.TotalSeconds:N1}s.");
+        log("Risk phase: updating event risk scores.");
         ExecuteWithSqliteRetry(() => UpdateEventScores(conn, config), log, "updating event risk scores");
+        log($"Risk phase complete: updated event risk scores in {sw.Elapsed.TotalSeconds:N1}s.");
 
         var summary = ExecuteWithSqliteRetry(() => GetRiskSummary(conn), log, "summarizing risk hits");
         log($"Risk hits written: {summary.TotalHits:N0}");
@@ -346,7 +371,7 @@ COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event
 COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('EmailInfo_From', 'ExchangeMetaData_From', 'Sender') LIMIT 1), '') AS email_from,
 COALESCE((SELECT group_concat(ef.field_value, '; ') FROM event_fields ef WHERE ef.event_id = e.event_id AND (ef.field_name LIKE 'EmailInfo_To_%' OR ef.field_name LIKE 'ExchangeMetaData_To_%' OR ef.field_name LIKE 'EmailInfo_Cc_%' OR ef.field_name LIKE 'ExchangeMetaData_CC_%' OR ef.field_name LIKE 'EmailInfo_Bcc_%' OR ef.field_name LIKE 'ExchangeMetaData_BCC_%')), '') AS email_to,
 COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('EmailInfo_Subject', 'ExchangeMetaData_Subject', 'Item_Subject', 'AffectedItems_0_Subject') LIMIT 1), '') AS email_subject,
-COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('DisplayTarget','TargetPath','OriginalSourcePath','Original Path','FolderPath','SourceRelativeUrl','DestinationRelativeUrl','Folder_Path','Item_ParentFolder_Path','AffectedItems_0_ParentFolder_Path','SourceUrl','SourceUrlChain','Url','CloudAccount','OneDriveUserFolder','Dropbox_personal_path','GoogleDriveAccountFromPath') AND IFNULL(ef.field_value,'') NOT LIKE '%WorkingEvidence%' LIMIT 1), '') AS path_hint,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('GoogleDisplayTarget','GoogleTarget','GoogleSourceRelativeUrl','GoogleSiteUrl','GoogleDrive_DocumentId','GoogleGmail_AttachmentName','DisplayTarget','TargetPath','OriginalSourcePath','Original Path','FolderPath','SourceRelativeUrl','DestinationRelativeUrl','Folder_Path','Item_ParentFolder_Path','AffectedItems_0_ParentFolder_Path','SourceUrl','SourceUrlChain','Url','CloudAccount','OneDriveUserFolder','Dropbox_personal_path','GoogleDriveAccountFromPath') AND IFNULL(ef.field_value,'') NOT LIKE '%WorkingEvidence%' LIMIT 1), '') AS path_hint,
 COALESCE((SELECT group_concat(ef.field_value, '; ') FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name LIKE '%Attachment%'), '') AS attachments_expanded,
 e.data_source,
 COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('DriveType','Drive Type') LIMIT 1), '') AS drive_type

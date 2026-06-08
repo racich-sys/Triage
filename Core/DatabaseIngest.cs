@@ -66,6 +66,13 @@ INSERT INTO event_fields (event_id, field_name, field_value)
 VALUES ($event_id, $field_name, $field_value);
 ";
 
+        using var insertGoogleRawField = conn.CreateCommand();
+        insertGoogleRawField.Transaction = tx;
+        insertGoogleRawField.CommandText = @"
+INSERT INTO google_event_raw_fields (event_id, raw_family, field_name, field_value, source_file, source_row_number)
+VALUES ($event_id, $raw_family, $field_name, $field_value, $source_file, $source_row_number);
+";
+
         var rowCount = 0;
 
         foreach (var normEvent in parser.Parse(filePath, localTzName, log))
@@ -84,28 +91,31 @@ VALUES ($event_id, $field_name, $field_value);
 
             var timeBasis = FirstNonBlank(normEvent.EventTimeBasis, Get(fields, "EventTimeBasis"), "O365UALCreationDate");
             var timeConfidence = FirstNonBlank(normEvent.EventTimeConfidence, Get(fields, "EventTimeConfidence"), normEvent.TimestampUtc == DateTime.MinValue ? "Unknown" : "High");
-            var isBehavioral = normEvent.TimestampUtc != DateTime.MinValue;
-            var timeWarning = normEvent.TimestampUtc == DateTime.MinValue ? "UAL row had no parseable CreationDate." : string.Empty;
+            var isBehavioral = normEvent.IsBehavioralTimestamp ?? (normEvent.TimestampUtc != DateTime.MinValue);
+            var timeWarning = FirstNonBlank(normEvent.TimestampWarning, Get(fields, "TimestampWarning"), normEvent.TimestampUtc == DateTime.MinValue ? "UAL row had no parseable CreationDate." : string.Empty);
             fields["EventTimeBasis"] = timeBasis;
             fields["EventTimeConfidence"] = timeConfidence;
             fields["IsBehavioralTimestamp"] = isBehavioral ? "Yes" : "No";
             if (!string.IsNullOrWhiteSpace(timeWarning)) fields["TimestampWarning"] = timeWarning;
 
             var dataSource = normEvent.DataSource ?? string.Empty;
-            var workload = FirstNonBlank(Get(fields, "Workload"), dataSource.StartsWith("O365", StringComparison.OrdinalIgnoreCase) || dataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase) || dataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase) ? "Cloud" : "Endpoint");
-            var category = FirstNonBlank(Get(fields, "Category"), Get(fields, "EventCategory"));
-            var clientIp = !string.IsNullOrWhiteSpace(normEvent.ClientIp) ? normEvent.ClientIp : FirstNonBlank(Get(fields, "ClientIP"), Get(fields, "ClientIPAddress"), Get(fields, "ActorIpAddress"), Get(fields, "IP address"), Get(fields, "IP Address"));
-            var clientIpAlt = Get(fields, "ClientIPAddress");
-            var userAgent = FirstNonBlank(Get(fields, "UserAgent"), Get(fields, "User agent"), Get(fields, "User Agent"), Get(fields, "User Agent String"));
-            var objectId = !string.IsNullOrWhiteSpace(normEvent.ObjectPath) ? normEvent.ObjectPath : FirstNonBlank(Get(fields, "ObjectId"), Get(fields, "ItemId"), Get(fields, "FileId"), Get(fields, "Document ID"), Get(fields, "Title"), Get(fields, "Target"), Get(fields, "URL"), Get(fields, "Subject"));
-            var siteUrl = FirstNonBlank(Get(fields, "SiteUrl"), Get(fields, "Site URL"), Get(fields, "URL"), Get(fields, "Resource Url"), Get(fields, "Attachment URL"));
-            var sourceRelativeUrl = FirstNonBlank(Get(fields, "TargetPath"), Get(fields, "SourceRelativeUrl"), Get(fields, "DestinationRelativeUrl"), Get(fields, "URL"), Get(fields, "Target"));
-            var fileName = FirstNonBlank(Get(fields, "FileName"), Get(fields, "SourceFileName"), Get(fields, "DestinationFileName"), Get(fields, "Filename"), Get(fields, "Attachment name"), Get(fields, "Title"), SafeFileNameFromPath(objectId));
-            var fileSize = TryParseLong(FirstNonBlank(Get(fields, "FileSizeBytes"), Get(fields, "ExchangeMetaData_FileSize"), Get(fields, "Target File Size (Bytes)")));
+            var isGoogleSource = dataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase) || dataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || normEvent.Operation.StartsWith("Google", StringComparison.OrdinalIgnoreCase) || normEvent.Operation.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
+            var workload = isGoogleSource
+                ? FirstNonBlank(Get(fields, "GoogleWorkload"), "Cloud")
+                : FirstNonBlank(Get(fields, "Workload"), dataSource.StartsWith("O365", StringComparison.OrdinalIgnoreCase) ? "Cloud" : "Endpoint");
+            var category = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleCategory"), Get(fields, "GoogleEventCategory")) : FirstNonBlank(Get(fields, "Category"), Get(fields, "EventCategory"));
+            var clientIp = !string.IsNullOrWhiteSpace(normEvent.ClientIp) ? normEvent.ClientIp : (isGoogleSource ? FirstNonBlank(Get(fields, "GoogleClientIp"), Get(fields, "GoogleAuditRaw_IP_address"), Get(fields, "GoogleAuditRaw_IP_Address"), Get(fields, "GoogleTakeoutRaw_IP_Address")) : FirstNonBlank(Get(fields, "ClientIP"), Get(fields, "ClientIPAddress"), Get(fields, "ActorIpAddress"), Get(fields, "IP address"), Get(fields, "IP Address")));
+            var clientIpAlt = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleClientIpAlt"), Get(fields, "GoogleClientIp")) : Get(fields, "ClientIPAddress");
+            var userAgent = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleUserAgent"), Get(fields, "GoogleAuditRaw_User_agent"), Get(fields, "GoogleAuditRaw_User_Agent"), Get(fields, "GoogleTakeoutRaw_User_Agent_String")) : FirstNonBlank(Get(fields, "UserAgent"), Get(fields, "User agent"), Get(fields, "User Agent"), Get(fields, "User Agent String"));
+            var objectId = !string.IsNullOrWhiteSpace(normEvent.ObjectPath) ? normEvent.ObjectPath : (isGoogleSource ? FirstNonBlank(Get(fields, "GoogleTarget"), Get(fields, "GoogleStableObjectId"), Get(fields, "GoogleDisplayTarget")) : FirstNonBlank(Get(fields, "ObjectId"), Get(fields, "ItemId"), Get(fields, "FileId"), Get(fields, "Document ID"), Get(fields, "Title"), Get(fields, "Target"), Get(fields, "URL"), Get(fields, "Subject")));
+            var siteUrl = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleSiteUrl"), Get(fields, "GoogleTarget")) : FirstNonBlank(Get(fields, "SiteUrl"), Get(fields, "Site URL"), Get(fields, "URL"), Get(fields, "Resource Url"), Get(fields, "Attachment URL"));
+            var sourceRelativeUrl = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleSourceRelativeUrl"), Get(fields, "GoogleTarget")) : FirstNonBlank(Get(fields, "TargetPath"), Get(fields, "SourceRelativeUrl"), Get(fields, "DestinationRelativeUrl"), Get(fields, "URL"), Get(fields, "Target"));
+            var fileName = isGoogleSource ? FirstNonBlank(Get(fields, "GoogleFileName"), Get(fields, "GoogleTargetFileName"), SafeFileNameFromPath(objectId)) : FirstNonBlank(Get(fields, "FileName"), Get(fields, "SourceFileName"), Get(fields, "DestinationFileName"), Get(fields, "Filename"), Get(fields, "Attachment name"), Get(fields, "Title"), SafeFileNameFromPath(objectId));
+            var fileSize = TryParseLong(isGoogleSource ? FirstNonBlank(Get(fields, "GoogleFileSizeBytes")) : FirstNonBlank(Get(fields, "FileSizeBytes"), Get(fields, "ExchangeMetaData_FileSize"), Get(fields, "Target File Size (Bytes)")));
             var recipients = BuildRecipients(fields);
             var attachmentDetails = BuildAttachments(fields);
-            var resultStatus = Get(fields, "ResultStatus");
-            var rawJson = Get(fields, "AuditData");
+            var resultStatus = isGoogleSource ? Get(fields, "GoogleResultStatus") : Get(fields, "ResultStatus");
+            var rawJson = isGoogleSource ? Get(fields, "GoogleRawSerializedRow") : Get(fields, "AuditData");
 
             insertEvent.Parameters.Clear();
             insertEvent.Parameters.AddWithValue("$data_source", dataSource);
@@ -137,9 +147,30 @@ VALUES ($event_id, $field_name, $field_value);
 
             var eventId = (long)(insertEvent.ExecuteScalar() ?? 0L);
 
+            var writtenFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var kvp in fields)
             {
                 if (CoreColumns.Contains(kvp.Key) || string.IsNullOrWhiteSpace(kvp.Value))
+                    continue;
+
+                if (isGoogleSource && IsGoogleRawField(kvp.Key))
+                {
+                    insertGoogleRawField.Parameters.Clear();
+                    insertGoogleRawField.Parameters.AddWithValue("$event_id", eventId);
+                    insertGoogleRawField.Parameters.AddWithValue("$raw_family", GoogleRawFamily(kvp.Key));
+                    insertGoogleRawField.Parameters.AddWithValue("$field_name", kvp.Key);
+                    insertGoogleRawField.Parameters.AddWithValue("$field_value", kvp.Value);
+                    insertGoogleRawField.Parameters.AddWithValue("$source_file", Path.GetFileName(filePath));
+                    insertGoogleRawField.Parameters.AddWithValue("$source_row_number", rowCount);
+                    insertGoogleRawField.ExecuteNonQuery();
+                    continue;
+                }
+
+                if (ShouldSkipGoogleMetadataField(kvp.Key, kvp.Value, isGoogleSource, normEvent, workload, category, clientIp, userAgent, objectId, siteUrl, sourceRelativeUrl, fileName, resultStatus))
+                    continue;
+
+                var fieldFingerprint = kvp.Key + "\u001f" + kvp.Value;
+                if (!writtenFields.Add(fieldFingerprint))
                     continue;
 
                 insertField.Parameters.Clear();
@@ -162,6 +193,87 @@ VALUES ($event_id, $field_name, $field_value);
             DatabasePath = dbPath
         };
     }
+
+
+    private static bool IsGoogleRawField(string key)
+        => key.StartsWith("GoogleAuditRaw_", StringComparison.OrdinalIgnoreCase) ||
+           key.StartsWith("GoogleTakeoutRaw_", StringComparison.OrdinalIgnoreCase);
+
+    private static string GoogleRawFamily(string key)
+    {
+        if (key.StartsWith("GoogleAuditRaw_", StringComparison.OrdinalIgnoreCase)) return "GoogleAuditRaw";
+        if (key.StartsWith("GoogleTakeoutRaw_", StringComparison.OrdinalIgnoreCase)) return "GoogleTakeoutRaw";
+        return "GoogleRaw";
+    }
+
+    private static bool ShouldSkipGoogleMetadataField(
+        string key,
+        string value,
+        bool isGoogleSource,
+        NormalizedEvent ev,
+        string workload,
+        string category,
+        string clientIp,
+        string userAgent,
+        string objectId,
+        string siteUrl,
+        string sourceRelativeUrl,
+        string fileName,
+        string resultStatus)
+    {
+        if (!isGoogleSource)
+            return false;
+
+        if (key.Equals("GoogleRawSerializedRow", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (key.Equals("GoogleMasterExportSchema", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (key.StartsWith("GoogleRisk", StringComparison.OrdinalIgnoreCase) && value.Equals("No", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (key.Equals("GoogleUserId", StringComparison.OrdinalIgnoreCase) || key.Equals("GoogleActor", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, ev.UserId);
+
+        if (key.Equals("GoogleClientIp", StringComparison.OrdinalIgnoreCase) || key.Equals("GoogleClientIpAlt", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, clientIp);
+
+        if (key.Equals("GoogleUserAgent", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, userAgent);
+
+        if (key.Equals("GoogleOperationNormalized", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, ev.Operation);
+
+        if (key.Equals("GoogleWorkload", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, workload);
+
+        if (key.Equals("GoogleCategory", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, category);
+
+        if (key.Equals("GoogleTarget", StringComparison.OrdinalIgnoreCase) || key.Equals("GoogleDisplayTarget", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, objectId);
+
+        if (key.Equals("GoogleSiteUrl", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, siteUrl) || SameText(value, objectId);
+
+        if (key.Equals("GoogleSourceRelativeUrl", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, sourceRelativeUrl) || SameText(value, objectId);
+
+        if (key.Equals("GoogleFileName", StringComparison.OrdinalIgnoreCase) || key.Equals("GoogleTargetFileName", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, fileName);
+
+        if (key.Equals("GoogleFileSizeBytes", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (key.Equals("GoogleResultStatus", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, resultStatus);
+
+        return false;
+    }
+
+    private static bool SameText(string? a, string? b)
+        => string.Equals((a ?? string.Empty).Trim(), (b ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static string Get(Dictionary<string, string> row, string key)
         => row.TryGetValue(key, out var value) ? value ?? "" : "";

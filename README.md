@@ -1,27 +1,16 @@
-# Vestigant Triage v3.4.3
+# Vestigant Triage v3.6.3.1
 
-v3.4.3 is a narrow build hotfix for the v3.4.0 Google source framework. It fixes the invalid C# backslash character literal in `Parsers\ParserRegistry.cs`, adds the root `ai_context.md` living project context file, and preserves all v3.4.0 Google source functionality.
+v3.6.3.1 preserves the Google metadata storage hotfix and adds Google thin-test logging, phase status, risk progress, and heartbeat diagnostics.
 
-## Build and fixed-image validation
+## Google validation command
 
 ```powershell
 Set-Location D:\Downloads
-Get-FileHash .\VestigantTriage_v3_4_3_google_framework_build_fix.zip -Algorithm SHA256
-Expand-Archive -LiteralPath .\VestigantTriage_v3_4_3_google_framework_build_fix.zip -DestinationPath T:\ -Force
-& "T:\VestigantTriage_v3_4_3\RUN_DEFAULT_IMAGE_TRIAGE.ps1"
+Get-FileHash .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -Algorithm SHA256
+Expand-Archive -LiteralPath .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -DestinationPath T:\ -Force
+& "T:\VestigantTriage_v3_6_3_1\RUN_GOOGLE_SOURCE_TRIAGE.ps1" -GoogleRoot "E:\0445_0001"
 ```
 
-Expected upload:
+## Review focus
 
-```text
-D:\Downloads\Upload_VestigantTriage_v3_4_3_*.zip
-```
-
-## Google-source validation after build
-
-1. Open the GUI.
-2. Add the Google Audit ZIP using **Google Workspace Audit / Investigation CSV or ZIP**.
-3. Add the Takeout archive or folder using **Google Takeout Archive / Export Files**.
-4. Add the Gemini session ZIP using **Gemini Session Archive**.
-5. Run ingest, risk analysis, then export the validation bundle.
-6. Review the `vestigant_google_*.csv` validation files and the Master metadata export.
+Review `vestigant_google_field_collision_review.csv`, `vestigant_google_schema_coverage.csv`, `vestigant_google_unmapped_columns.csv`, and the Master metadata export. Google cloud-specific values should appear in Google-prefixed metadata fields rather than unprefixed endpoint/O365 columns.

@@ -1,16 +1,13 @@
-# Vestigant Triage Project Roadmap and Continuation - v3.4.3
+# Vestigant Triage Project Roadmap and Continuation - v3.6.3.1
 
-## Completed in v3.4.3
+## Completed in v3.6.3.1
 
-- Fixed the v3.4.0 compile failure in `Parsers\ParserRegistry.cs` caused by an invalid backslash character literal.
-- Added root `ai_context.md` as the living context file for future sessions and releases.
-- Added upload-bundle inclusion of `ai_context.md`.
-- Preserved the v3.4.0 Google source framework.
+- Separated Google cloud metadata from endpoint/O365-style metadata fields.
+- Added Google-prefixed canonical fields and raw column preservation (`GoogleAuditRaw_*`, `GoogleTakeoutRaw_*`).
+- Restricted the Master metadata export so Google rows do not fill the full O365/endpoint preferred column set.
+- Added `vestigant_google_field_collision_review.csv` for validation review.
+- Updated `ai_context.md` with the current context, known bugs, and Graveyard decisions.
 
-## Next validation
+## Next validation goal
 
-1. Build v3.4.3 on the Windows workstation.
-2. Run fixed-image headless triage to confirm no regression.
-3. Ingest the uploaded Google Workspace Audit ZIP, Takeout examples, and Gemini session archive.
-4. Review `vestigant_google_*.csv` validation outputs.
-5. Harden Google parser coverage based on actual validation results.
+Run `RUN_GOOGLE_SOURCE_TRIAGE.ps1` against `E:\0445_0001`, upload the generated thin review bundle, and review whether Google rows remain readable while avoiding generic field collisions.

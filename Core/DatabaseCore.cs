@@ -163,6 +163,7 @@ public static class DatabaseCore
         }
 
         EnsureEventColumns(conn);
+        EnsureGoogleRawFieldTable(conn);
         EnsureRiskHitColumns(conn);
         EnsureTagTables(conn);
         NormalizeLegacyTimestampFlags(conn);
@@ -170,6 +171,26 @@ public static class DatabaseCore
         EnsurePerformanceIndexes(conn);
             InitializedDatabasePaths.Add(fullPath);
         }
+    }
+
+    private static void EnsureGoogleRawFieldTable(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS google_event_raw_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id INTEGER NOT NULL,
+                raw_family TEXT DEFAULT '',
+                field_name TEXT NOT NULL,
+                field_value TEXT DEFAULT '',
+                source_file TEXT DEFAULT '',
+                source_row_number INTEGER DEFAULT 0,
+                FOREIGN KEY(event_id) REFERENCES events(event_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_google_raw_event ON google_event_raw_fields(event_id);
+            CREATE INDEX IF NOT EXISTS ix_google_raw_family_name ON google_event_raw_fields(raw_family, field_name);
+        ";
+        cmd.ExecuteNonQuery();
     }
 
     private static void EnsurePerformanceIndexes(SqliteConnection conn)
@@ -182,8 +203,9 @@ public static class DatabaseCore
             CREATE INDEX IF NOT EXISTS ix_events_source_time ON events(data_source, creation_date_utc);
             CREATE INDEX IF NOT EXISTS ix_events_file_name ON events(file_name);
             CREATE INDEX IF NOT EXISTS ix_events_risk ON events(risk_level, risk_score DESC);
-            CREATE INDEX IF NOT EXISTS ix_event_fields_name_value ON event_fields(field_name, field_value);
-            CREATE INDEX IF NOT EXISTS ix_event_fields_value ON event_fields(field_value);
+            DROP INDEX IF EXISTS ix_event_fields_name_value;
+            DROP INDEX IF EXISTS ix_event_fields_value;
+            CREATE INDEX IF NOT EXISTS ix_event_fields_name ON event_fields(field_name);
             CREATE INDEX IF NOT EXISTS ix_risk_hits_level_score ON risk_hits(risk_level, risk_score DESC);
             CREATE INDEX IF NOT EXISTS ix_risk_hits_domain_score ON risk_hits(risk_domain, risk_score DESC);
             CREATE INDEX IF NOT EXISTS ix_risk_hits_rule ON risk_hits(rule_code);
@@ -435,6 +457,11 @@ public static class DatabaseCore
 
     private const string PreferredMasterMetadataExportHeaderText = "RecordId\tCreationDate\tRecordType\tOperation\tUserId\tActivity\tActivityId\tActivityParameters\tActorContextId\tActorInfoString\tActorIpAddress\tActor_0_ID\tActor_0_Type\tActor_1_ID\tActor_1_Type\tAdditionalInfo_EnvironmentName\tAffectedItems_0_Attachments\tAffectedItems_0_Id\tAffectedItems_0_InternetMessageId\tAffectedItems_0_ParentFolder_Id\tAffectedItems_0_ParentFolder_Path\tAffectedItems_0_Subject\tAffectedItems_1_Attachments\tAffectedItems_1_Id\tAffectedItems_1_InternetMessageId\tAffectedItems_1_ParentFolder_Id\tAffectedItems_1_ParentFolder_Path\tAffectedItems_1_Subject\tAffectedItems_2_Attachments\tAffectedItems_2_Id\tAffectedItems_2_InternetMessageId\tAffectedItems_2_ParentFolder_Id\tAffectedItems_2_ParentFolder_Path\tAffectedItems_2_Subject\tAffectedItems_3_Attachments\tAffectedItems_3_Id\tAffectedItems_3_InternetMessageId\tAffectedItems_3_ParentFolder_Id\tAffectedItems_3_ParentFolder_Path\tAffectedItems_3_Subject\tAffectedItems_4_Attachments\tAffectedItems_4_Id\tAffectedItems_4_InternetMessageId\tAffectedItems_4_ParentFolder_Id\tAffectedItems_4_ParentFolder_Path\tAffectedItems_4_Subject\tAppAccessContext_AADSessionId\tAppAccessContext_APIId\tAppAccessContext_ApiId\tAppAccessContext_AuthTime\tAppAccessContext_ClientAppId\tAppAccessContext_ClientAppName\tAppAccessContext_CorrelationId\tAppAccessContext_DeviceId\tAppAccessContext_IssuedAtTime\tAppAccessContext_TokenIssuedAtTime\tAppAccessContext_UniqueTokenId\tAppAccessContext_UserObjectId\tAppId\tAppName\tAppPoolName\tAppReportId\tApplicationDisplayName\tApplicationId\tArtifactId\tArtifactKind\tArtifactName\tArtifactsShared_0_ArtifactShareSessions_0_EndTimestamp\tArtifactsShared_0_ArtifactShareSessions_0_ScreenShareId\tArtifactsShared_0_ArtifactShareSessions_0_StartTimestamp\tArtifactsShared_0_ArtifactShareSessions_1_EndTimestamp\tArtifactsShared_0_ArtifactShareSessions_1_ScreenShareId\tArtifactsShared_0_ArtifactShareSessions_1_StartTimestamp\tArtifactsShared_0_ArtifactSharedName\tAssertingApplicationId\tAttendees_0_DisplayName\tAttendees_0_InviterInfo_DisplayName\tAttendees_0_InviterInfo_InviteTime\tAttendees_0_InviterInfo_OrganizationId\tAttendees_0_InviterInfo_UPN\tAttendees_0_InviterInfo_UserIdentifier\tAttendees_0_InviterInfo_UserType\tAttendees_0_IsAADGuest\tAttendees_0_IsOrganizer\tAttendees_0_OrganizationId\tAttendees_0_ProviderType\tAttendees_0_RecipientType\tAttendees_0_Role\tAttendees_0_UPN\tAttendees_0_UserIdType\tAttendees_0_UserObjectId\tAuthType\tAuthenticationType\tAzureActiveDirectoryEventType\tBillingType\tBrowserName\tBrowserVersion\tCallId\tCapacityId\tCapacityName\tChatName\tChatThreadId\tClientAppId\tClientIP\tClientIPAddress\tClientInfoString\tClientProcessName\tClientRequestId\tClientVersion\tCommunicationSubType\tCommunicationType\tConferenceUri\tConsumptionMethod\tContactEmail1DisplayName\tContactEmail1EmailAddress\tContainerId\tContainerType\tCorrelationID\tCorrelationId\tCreationTime\tCrossMailboxOperation\tCrossScopeSyncDelete\tCustomUniqueId\tCustomizedDoclib\tDatasetId\tDatasetName\tDestFolder_Id\tDestFolder_Path\tDestinationFileExtension\tDestinationFileName\tDestinationRelativeUrl\tDeviceDisplayName\tDeviceId\tDeviceInformation\tDeviceProperties_0_Name\tDeviceProperties_0_Value\tDeviceProperties_1_Name\tDeviceProperties_1_Value\tDeviceProperties_2_Name\tDeviceProperties_2_Value\tDeviceProperties_3_Name\tDeviceProperties_3_Value\tDeviceProperties_4_Name\tDeviceProperties_4_Value\tDeviceProperties_5_Name\tDeviceProperties_5_Value\tDeviceProperties_6_Name\tDeviceProperties_6_Value\tDeviceProperties_7_Name\tDeviceProperties_7_Value\tDistributionMethod\tDoNotDistributeEvent\tEndTime\tErrorNumber\tEventData\tEventSignature\tEventSource\tExchangeId\tExtendedProperties_0_Name\tExtendedProperties_0_Value\tExtendedProperties_1_Name\tExtendedProperties_1_Value\tExtendedProperties_2_Name\tExtendedProperties_2_Value\tExtendedProperties_3_Name\tExtendedProperties_3_Value\tExternalAccess\tExtraProperties_0_Key\tExtraProperties_0_Value\tExtraProperties_1_Key\tExtraProperties_1_Value\tExtraProperties_2_Key\tExtraProperties_2_Value\tExtraProperties_3_Key\tExtraProperties_3_Value\tExtraProperties_4_Key\tExtraProperties_4_Value\tExtraProperties_5_Key\tExtraProperties_5_Value\tExtraProperties_6_Key\tExtraProperties_6_Value\tFileSizeBytes\tFileSyncBytesCommitted\tFolder_Id\tFolder_Path\tFolders_0_FolderItems_0_ClientRequestId\tFolders_0_FolderItems_0_CreationTime\tFolders_0_FolderItems_0_Id\tFolders_0_FolderItems_0_ImmutableId\tFolders_0_FolderItems_0_InternetMessageId\tFolders_0_FolderItems_0_SizeInBytes\tFolders_0_FolderItems_0_Subject\tFolders_0_FolderItems_10_ClientRequestId\tFolders_0_FolderItems_10_CreationTime\tFolders_0_FolderItems_10_Id\tFolders_0_FolderItems_10_ImmutableId\tFolders_0_FolderItems_10_InternetMessageId\tFolders_0_FolderItems_10_SizeInBytes\tFolders_0_FolderItems_10_Subject\tFolders_0_FolderItems_1_ClientRequestId\tFolders_0_FolderItems_1_CreationTime\tFolders_0_FolderItems_1_Id\tFolders_0_FolderItems_1_ImmutableId\tFolders_0_FolderItems_1_InternetMessageId\tFolders_0_FolderItems_1_SizeInBytes\tFolders_0_FolderItems_1_Subject\tFolders_0_FolderItems_2_ClientRequestId\tFolders_0_FolderItems_2_CreationTime\tFolders_0_FolderItems_2_Id\tFolders_0_FolderItems_2_ImmutableId\tFolders_0_FolderItems_2_InternetMessageId\tFolders_0_FolderItems_2_SizeInBytes\tFolders_0_FolderItems_2_Subject\tFolders_0_FolderItems_3_ClientRequestId\tFolders_0_FolderItems_3_CreationTime\tFolders_0_FolderItems_3_Id\tFolders_0_FolderItems_3_ImmutableId\tFolders_0_FolderItems_3_InternetMessageId\tFolders_0_FolderItems_3_SizeInBytes\tFolders_0_FolderItems_3_Subject\tFolders_0_FolderItems_4_ClientRequestId\tFolders_0_FolderItems_4_CreationTime\tFolders_0_FolderItems_4_Id\tFolders_0_FolderItems_4_ImmutableId\tFolders_0_FolderItems_4_InternetMessageId\tFolders_0_FolderItems_4_SizeInBytes\tFolders_0_FolderItems_4_Subject\tFolders_0_FolderItems_5_ClientRequestId\tFolders_0_FolderItems_5_CreationTime\tFolders_0_FolderItems_5_Id\tFolders_0_FolderItems_5_ImmutableId\tFolders_0_FolderItems_5_InternetMessageId\tFolders_0_FolderItems_5_SizeInBytes\tFolders_0_FolderItems_5_Subject\tFolders_0_FolderItems_6_ClientRequestId\tFolders_0_FolderItems_6_CreationTime\tFolders_0_FolderItems_6_Id\tFolders_0_FolderItems_6_ImmutableId\tFolders_0_FolderItems_6_InternetMessageId\tFolders_0_FolderItems_6_SizeInBytes\tFolders_0_FolderItems_6_Subject\tFolders_0_FolderItems_7_ClientRequestId\tFolders_0_FolderItems_7_CreationTime\tFolders_0_FolderItems_7_Id\tFolders_0_FolderItems_7_ImmutableId\tFolders_0_FolderItems_7_InternetMessageId\tFolders_0_FolderItems_7_SizeInBytes\tFolders_0_FolderItems_7_Subject\tFolders_0_FolderItems_8_ClientRequestId\tFolders_0_FolderItems_8_CreationTime\tFolders_0_FolderItems_8_Id\tFolders_0_FolderItems_8_ImmutableId\tFolders_0_FolderItems_8_InternetMessageId\tFolders_0_FolderItems_8_SizeInBytes\tFolders_0_FolderItems_8_Subject\tFolders_0_FolderItems_9_ClientRequestId\tFolders_0_FolderItems_9_CreationTime\tFolders_0_FolderItems_9_Id\tFolders_0_FolderItems_9_ImmutableId\tFolders_0_FolderItems_9_InternetMessageId\tFolders_0_FolderItems_9_SizeInBytes\tFolders_0_FolderItems_9_Subject\tFolders_0_Id\tFolders_0_Path\tFolders_1_FolderItems_0_ClientRequestId\tFolders_1_FolderItems_0_CreationTime\tFolders_1_FolderItems_0_Id\tFolders_1_FolderItems_0_ImmutableId\tFolders_1_FolderItems_0_InternetMessageId\tFolders_1_FolderItems_0_SizeInBytes\tFolders_1_FolderItems_0_Subject\tFolders_1_FolderItems_1_ClientRequestId\tFolders_1_FolderItems_1_CreationTime\tFolders_1_FolderItems_1_Id\tFolders_1_FolderItems_1_ImmutableId\tFolders_1_FolderItems_1_InternetMessageId\tFolders_1_FolderItems_1_SizeInBytes\tFolders_1_FolderItems_1_Subject\tFolders_1_FolderItems_2_ClientRequestId\tFolders_1_FolderItems_2_CreationTime\tFolders_1_FolderItems_2_Id\tFolders_1_FolderItems_2_ImmutableId\tFolders_1_FolderItems_2_InternetMessageId\tFolders_1_FolderItems_2_SizeInBytes\tFolders_1_FolderItems_2_Subject\tFolders_1_FolderItems_3_ClientRequestId\tFolders_1_FolderItems_3_CreationTime\tFolders_1_FolderItems_3_Id\tFolders_1_FolderItems_3_ImmutableId\tFolders_1_FolderItems_3_InternetMessageId\tFolders_1_FolderItems_3_SizeInBytes\tFolders_1_FolderItems_3_Subject\tFolders_1_FolderItems_4_ClientRequestId\tFolders_1_FolderItems_4_CreationTime\tFolders_1_FolderItems_4_Id\tFolders_1_FolderItems_4_ImmutableId\tFolders_1_FolderItems_4_InternetMessageId\tFolders_1_FolderItems_4_SizeInBytes\tFolders_1_FolderItems_4_Subject\tFolders_1_FolderItems_5_ClientRequestId\tFolders_1_FolderItems_5_CreationTime\tFolders_1_FolderItems_5_Id\tFolders_1_FolderItems_5_ImmutableId\tFolders_1_FolderItems_5_InternetMessageId\tFolders_1_FolderItems_5_SizeInBytes\tFolders_1_FolderItems_5_Subject\tFolders_1_FolderItems_6_ClientRequestId\tFolders_1_FolderItems_6_CreationTime\tFolders_1_FolderItems_6_Id\tFolders_1_FolderItems_6_ImmutableId\tFolders_1_FolderItems_6_InternetMessageId\tFolders_1_FolderItems_6_SizeInBytes\tFolders_1_FolderItems_6_Subject\tFolders_1_FolderItems_7_ClientRequestId\tFolders_1_FolderItems_7_CreationTime\tFolders_1_FolderItems_7_Id\tFolders_1_FolderItems_7_ImmutableId\tFolders_1_FolderItems_7_InternetMessageId\tFolders_1_FolderItems_7_SizeInBytes\tFolders_1_FolderItems_7_Subject\tFolders_1_FolderItems_8_ClientRequestId\tFolders_1_FolderItems_8_CreationTime\tFolders_1_FolderItems_8_Id\tFolders_1_FolderItems_8_ImmutableId\tFolders_1_FolderItems_8_InternetMessageId\tFolders_1_FolderItems_8_SizeInBytes\tFolders_1_FolderItems_8_Subject\tFolders_1_FolderItems_9_ClientRequestId\tFolders_1_FolderItems_9_CreationTime\tFolders_1_FolderItems_9_Id\tFolders_1_FolderItems_9_ImmutableId\tFolders_1_FolderItems_9_InternetMessageId\tFolders_1_FolderItems_9_SizeInBytes\tFolders_1_FolderItems_9_Subject\tFolders_1_Id\tFolders_1_Path\tFolders_2_FolderItems_0_ClientRequestId\tFolders_2_FolderItems_0_CreationTime\tFolders_2_FolderItems_0_Id\tFolders_2_FolderItems_0_ImmutableId\tFolders_2_FolderItems_0_InternetMessageId\tFolders_2_FolderItems_0_SizeInBytes\tFolders_2_FolderItems_0_Subject\tFolders_2_FolderItems_1_ClientRequestId\tFolders_2_FolderItems_1_CreationTime\tFolders_2_FolderItems_1_Id\tFolders_2_FolderItems_1_ImmutableId\tFolders_2_FolderItems_1_InternetMessageId\tFolders_2_FolderItems_1_SizeInBytes\tFolders_2_FolderItems_1_Subject\tFolders_2_FolderItems_2_ClientRequestId\tFolders_2_FolderItems_2_CreationTime\tFolders_2_FolderItems_2_Id\tFolders_2_FolderItems_2_ImmutableId\tFolders_2_FolderItems_2_InternetMessageId\tFolders_2_FolderItems_2_SizeInBytes\tFolders_2_FolderItems_2_Subject\tFolders_2_FolderItems_3_ClientRequestId\tFolders_2_FolderItems_3_CreationTime\tFolders_2_FolderItems_3_Id\tFolders_2_FolderItems_3_ImmutableId\tFolders_2_FolderItems_3_InternetMessageId\tFolders_2_FolderItems_3_SizeInBytes\tFolders_2_FolderItems_3_Subject\tFolders_2_Id\tFolders_2_Path\tFolders_3_FolderItems_0_ClientRequestId\tFolders_3_FolderItems_0_CreationTime\tFolders_3_FolderItems_0_Id\tFolders_3_FolderItems_0_ImmutableId\tFolders_3_FolderItems_0_InternetMessageId\tFolders_3_FolderItems_0_SizeInBytes\tFolders_3_FolderItems_0_Subject\tFolders_3_FolderItems_1_ClientRequestId\tFolders_3_FolderItems_1_CreationTime\tFolders_3_FolderItems_1_Id\tFolders_3_FolderItems_1_ImmutableId\tFolders_3_FolderItems_1_InternetMessageId\tFolders_3_FolderItems_1_SizeInBytes\tFolders_3_FolderItems_1_Subject\tFolders_3_Id\tFolders_3_Path\tFormId\tFormName\tFormsUserType\tFromApp\tGeoLocation\tHighPriorityMediaProcessing\tHostAppId\tICalUid\tId\tImplicitShare\tInterSystemsId\tInternalLogonType\tIntraSystemId\tIsBilateral\tIsCopilotMentioned\tIsManagedDevice\tIsSuccess\tItemCount\tItemName\tItemType\tItem_Attachments\tItem_Id\tItem_ImmutableId\tItem_InternetMessageId\tItem_IsRecord\tItem_ParentFolder_Id\tItem_ParentFolder_Name\tItem_ParentFolder_Path\tItem_SizeInBytes\tItem_Subject\tJoinTime\tLeaveTime\tListBaseTemplateType\tListBaseType\tListColor\tListIcon\tListId\tListItemUniqueId\tListName\tListServerTemplate\tListTitle\tListUrl\tLogonError\tLogonType\tLogonUserSid\tMachineDomainInfo\tMachineId\tMailboxGuid\tMailboxOwnerSid\tMailboxOwnerUPN\tMeetingDetailId\tMeetingURL\tMessageId\tMessageURLs_0\tMessageVersion\tMessages_0_Id\tMessages_0_MessageItems_0_Id\tMessages_0_MessageItems_0_SizeInBytes\tMessages_0_MessageItems_1_Id\tMessages_0_MessageItems_1_SizeInBytes\tMessages_0_MessageItems_2_Id\tMessages_0_MessageItems_2_SizeInBytes\tMessages_0_MessageItems_3_Id\tMessages_0_MessageItems_3_SizeInBytes\tMessages_0_MessageItems_4_Id\tMessages_0_MessageItems_4_SizeInBytes\tMessages_0_MessageItems_5_Id\tMessages_0_MessageItems_5_SizeInBytes\tMessages_0_MessageItems_6_Id\tMessages_0_MessageItems_6_SizeInBytes\tMessages_0_MessageItems_7_Id\tMessages_0_MessageItems_7_SizeInBytes\tMessages_0_MessageItems_8_Id\tMessages_0_MessageItems_8_SizeInBytes\tMessages_0_MessageItems_9_Id\tMessages_0_MessageItems_9_SizeInBytes\tMessages_0_Path\tMessages_1_Id\tMessages_1_MessageItems_0_Id\tMessages_1_MessageItems_0_SizeInBytes\tMessages_1_MessageItems_1_Id\tMessages_1_MessageItems_1_SizeInBytes\tMessages_1_MessageItems_2_Id\tMessages_1_MessageItems_2_SizeInBytes\tMessages_1_Path\tMessages_2_Id\tMessages_2_MessageItems_0_Id\tMessages_2_MessageItems_0_SizeInBytes\tMessages_2_MessageItems_1_Id\tMessages_2_MessageItems_1_SizeInBytes\tMessages_2_Path\tModalities\tModifiedProperties_0\tModifiedProperties_0_Name\tModifiedProperties_0_NewValue\tModifiedProperties_0_OldValue\tModifiedProperties_1\tModifiedProperties_10\tModifiedProperties_11\tModifiedProperties_12\tModifiedProperties_13\tModifiedProperties_14\tModifiedProperties_15\tModifiedProperties_16\tModifiedProperties_17\tModifiedProperties_18\tModifiedProperties_19\tModifiedProperties_2\tModifiedProperties_20\tModifiedProperties_21\tModifiedProperties_22\tModifiedProperties_23\tModifiedProperties_24\tModifiedProperties_25\tModifiedProperties_26\tModifiedProperties_27\tModifiedProperties_28\tModifiedProperties_29\tModifiedProperties_3\tModifiedProperties_30\tModifiedProperties_31\tModifiedProperties_32\tModifiedProperties_33\tModifiedProperties_34\tModifiedProperties_35\tModifiedProperties_36\tModifiedProperties_37\tModifiedProperties_38\tModifiedProperties_39\tModifiedProperties_4\tModifiedProperties_40\tModifiedProperties_41\tModifiedProperties_42\tModifiedProperties_43\tModifiedProperties_44\tModifiedProperties_45\tModifiedProperties_46\tModifiedProperties_47\tModifiedProperties_48\tModifiedProperties_49\tModifiedProperties_5\tModifiedProperties_50\tModifiedProperties_51\tModifiedProperties_52\tModifiedProperties_53\tModifiedProperties_54\tModifiedProperties_6\tModifiedProperties_7\tModifiedProperties_8\tModifiedProperties_9\tObjectId\tOperationCount\tOperationProperties_0_Name\tOperationProperties_0_Value\tOrganizationId\tOrganizationName\tOrganizer_OrganizationId\tOrganizer_RecipientType\tOrganizer_Role\tOrganizer_UserObjectId\tOriginatingServer\tParameters_0_Name\tParameters_0_Value\tParameters_1_Name\tParameters_1_Value\tParticipantInfo_HasForeignTenantUsers\tParticipantInfo_HasGuestUsers\tParticipantInfo_HasOtherGuestUsers\tParticipantInfo_HasUnauthenticatedUsers\tParticipantInfo_ParticipatingTenantIds_0\tPermission\tPlatform\tProviderTypes\tRefreshEnforcementPolicy\tReportId\tReportName\tReportType\tRequestId\tResourceTenantId\tResultStatus\tSaveToSentItems\tSearchQueryText\tSessionId\tSharingLinkScope\tSharingType\tSite\tSiteUrl\tSource\tSourceApp\tSourceFileExtension\tSourceFileName\tSourceRelativeUrl\tStartTime\tSupportTicketId\tTargetContextId\tTargetUserOrGroupName\tTargetUserOrGroupType\tTarget_0_ID\tTarget_0_Type\tTaskList\tTemplateTypeId\tTokenObjectId\tTokenTenantId\tTokenType\tUniqueSharingId\tUserAgent\tUserKey\tUserSessionId\tUserType\tVersion\tWebId\tWorkSpaceName\tWorkload\tWorkspaceId\tZipFileName";
 
+    private static readonly HashSet<string> GoogleAllowedPreferredMasterHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "RecordId", "CreationDate", "CreationTime", "StartTime", "RecordType", "Operation", "Activity", "UserId", "UserKey", "Workload", "Source"
+    };
+
     private static readonly Dictionary<string, string> PreferredMasterHeaderEventColumnMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["RecordId"] = "record_id",
@@ -621,6 +648,17 @@ public static class DatabaseCore
         IReadOnlyDictionary<string, string> metadataForEvent,
         IReadOnlyDictionary<string, string> preferredHeaderMetadataSource)
     {
+        var isGoogleRow = IsGoogleExportRow(row);
+        if (isGoogleRow && !GoogleAllowedPreferredMasterHeaders.Contains(headerName))
+            return string.Empty;
+
+        if (isGoogleRow)
+        {
+            var googleSpecific = ResolveGooglePreferredMasterExportValue(headerName, row, metadataForEvent);
+            if (!string.IsNullOrWhiteSpace(googleSpecific))
+                return googleSpecific;
+        }
+
         if (preferredHeaderMetadataSource.TryGetValue(headerName, out var metadataField) &&
             metadataForEvent.TryGetValue(metadataField, out var metadataValue) &&
             !string.IsNullOrWhiteSpace(metadataValue))
@@ -634,6 +672,47 @@ public static class DatabaseCore
             return eventValue ?? string.Empty;
         }
 
+        return string.Empty;
+    }
+
+    private static bool IsGoogleExportRow(EventExportRow row)
+    {
+        var dataSource = row.Values.TryGetValue("data_source", out var ds) ? ds ?? string.Empty : string.Empty;
+        var operation = row.Values.TryGetValue("operation", out var op) ? op ?? string.Empty : string.Empty;
+        return dataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase)
+            || dataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase)
+            || operation.StartsWith("Google", StringComparison.OrdinalIgnoreCase)
+            || operation.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveGooglePreferredMasterExportValue(string headerName, EventExportRow row, IReadOnlyDictionary<string, string> metadataForEvent)
+    {
+        string Metadata(params string[] names)
+        {
+            foreach (var name in names)
+            {
+                if (metadataForEvent.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
+                    return value;
+            }
+            return string.Empty;
+        }
+
+        string EventColumn(string column)
+            => row.Values.TryGetValue(column, out var value) ? value ?? string.Empty : string.Empty;
+
+        if (headerName.Equals("RecordId", StringComparison.OrdinalIgnoreCase)) return Metadata("GoogleRecordId", "GoogleStableObjectId");
+        if (headerName.Equals("RecordType", StringComparison.OrdinalIgnoreCase)) return Metadata("GoogleRecordType");
+        if (headerName.Equals("CreationDate", StringComparison.OrdinalIgnoreCase)) return EventColumn("creation_date_utc");
+        if (headerName.Equals("CreationTime", StringComparison.OrdinalIgnoreCase)) return EventColumn("creation_date_utc");
+        if (headerName.Equals("StartTime", StringComparison.OrdinalIgnoreCase)) return EventColumn("creation_date_utc");
+        if (headerName.Equals("Operation", StringComparison.OrdinalIgnoreCase) || headerName.Equals("Activity", StringComparison.OrdinalIgnoreCase))
+        {
+            var op = Metadata("GoogleOperationNormalized", "GoogleOperationRaw", "GoogleOperationExact");
+            return string.IsNullOrWhiteSpace(op) ? EventColumn("operation") : op;
+        }
+        if (headerName.Equals("UserId", StringComparison.OrdinalIgnoreCase) || headerName.Equals("UserKey", StringComparison.OrdinalIgnoreCase)) return Metadata("GoogleUserId", "GoogleActor");
+        if (headerName.Equals("Workload", StringComparison.OrdinalIgnoreCase)) return Metadata("GoogleWorkload", "GoogleSourceFamily");
+        if (headerName.Equals("Source", StringComparison.OrdinalIgnoreCase)) return EventColumn("data_source");
         return string.Empty;
     }
 

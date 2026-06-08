@@ -54,6 +54,8 @@ internal static class ValidationBundleService
             var googleSchemaRows = 0;
             var googleRiskRows = 0;
             var googleUnmappedRows = 0;
+            var googleCollisionRows = 0;
+            var googleStorageRows = 0;
             if (dbExists)
             {
                 log?.Invoke("Building compact no-UAL event summary export...");
@@ -94,6 +96,10 @@ internal static class ValidationBundleService
                 googleRiskRows = RunValidationCsvExport("vestigant_google_risk_summary.csv", Path.Combine(tempRoot, "vestigant_google_risk_summary.csv"), output => ExportGoogleRiskSummary(dbPath, output), log);
                 log?.Invoke("Building Google unmapped columns export...");
                 googleUnmappedRows = RunValidationCsvExport("vestigant_google_unmapped_columns.csv", Path.Combine(tempRoot, "vestigant_google_unmapped_columns.csv"), output => ExportGoogleUnmappedColumns(dbPath, output), log);
+                log?.Invoke("Building Google field collision review export...");
+                googleCollisionRows = RunValidationCsvExport("vestigant_google_field_collision_review.csv", Path.Combine(tempRoot, "vestigant_google_field_collision_review.csv"), output => ExportGoogleFieldCollisionReview(dbPath, output), log);
+                log?.Invoke("Building Google metadata storage summary export...");
+                googleStorageRows = RunValidationCsvExport("vestigant_google_metadata_storage_summary.csv", Path.Combine(tempRoot, "vestigant_google_metadata_storage_summary.csv"), output => ExportGoogleMetadataStorageSummary(dbPath, output), log);
             }
             else
             {
@@ -106,10 +112,12 @@ internal static class ValidationBundleService
                 WriteEmptyCsv(Path.Combine(tempRoot, "vestigant_google_schema_coverage.csv"), "Warning", "Database file was not found or not configured.");
                 WriteEmptyCsv(Path.Combine(tempRoot, "vestigant_google_risk_summary.csv"), "Warning", "Database file was not found or not configured.");
                 WriteEmptyCsv(Path.Combine(tempRoot, "vestigant_google_unmapped_columns.csv"), "Warning", "Database file was not found or not configured.");
+                WriteEmptyCsv(Path.Combine(tempRoot, "vestigant_google_field_collision_review.csv"), "Warning", "Database file was not found or not configured.");
+                WriteEmptyCsv(Path.Combine(tempRoot, "vestigant_google_metadata_storage_summary.csv"), "Warning", "Database file was not found or not configured.");
             }
 
             WriteCaseSourceManifest(tempRoot, caseFile, caseFolder, dbPath, sourceCoverage.Rows.Count, parserCoverage.Rows.Count, parserErrors.Rows.Count, eventSummaryRows, fallbackRows, distinctSourceRows);
-            WriteReadme(tempRoot, caseFile, sourceCoverage.Rows.Count, parserCoverage.Rows.Count, parserErrors.Rows.Count, eventSummaryRows, fallbackRows, distinctSourceRows, candidateConflictRows, oneDriveSummaryRows, googleSourceRows, googleFamilyRows, googleSchemaRows, googleRiskRows, googleUnmappedRows, dbExists);
+            WriteReadme(tempRoot, caseFile, sourceCoverage.Rows.Count, parserCoverage.Rows.Count, parserErrors.Rows.Count, eventSummaryRows, fallbackRows, distinctSourceRows, candidateConflictRows, oneDriveSummaryRows, googleSourceRows, googleFamilyRows, googleSchemaRows, googleRiskRows, googleUnmappedRows, googleCollisionRows, googleStorageRows, dbExists);
 
             if (File.Exists(zipFullPath)) File.Delete(zipFullPath);
             ZipFile.CreateFromDirectory(tempRoot, zipFullPath, CompressionLevel.Optimal, includeBaseDirectory: false);
@@ -324,7 +332,7 @@ internal static class ValidationBundleService
                 e.source_file AS Source_File,
                 e.data_source AS Data_Source,
                 COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name='ParserName' LIMIT 1), e.data_source) AS Parser,
-                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
+                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GoogleGeminiArtifactKind','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
                 e.operation AS Operation,
                 COUNT(*) AS Rows,
                 SUM(CASE WHEN IFNULL(e.is_behavioral_timestamp,0)=1 THEN 1 ELSE 0 END) AS Behavioral_Rows,
@@ -353,12 +361,13 @@ internal static class ValidationBundleService
                 SELECT event_id,
                        MAX(CASE WHEN field_name='GoogleAuditFamily' THEN field_value END) AS GoogleAuditFamily,
                        MAX(CASE WHEN field_name='GoogleTakeoutProductFamily' THEN field_value END) AS GoogleTakeoutProductFamily,
+                       MAX(CASE WHEN field_name='GoogleGeminiArtifactKind' THEN field_value END) AS GoogleGeminiArtifactKind,
                        MAX(CASE WHEN field_name='GeminiArtifactKind' THEN field_value END) AS GeminiArtifactKind
                 FROM event_fields
                 GROUP BY event_id
             )
             SELECT
-                COALESCE(gf.GoogleAuditFamily, gf.GoogleTakeoutProductFamily, gf.GeminiArtifactKind, e.data_source) AS Google_Family,
+                COALESCE(gf.GoogleAuditFamily, gf.GoogleTakeoutProductFamily, gf.GoogleGeminiArtifactKind, gf.GeminiArtifactKind, e.data_source) AS Google_Family,
                 e.data_source AS Data_Source,
                 COUNT(*) AS Rows,
                 COUNT(DISTINCT e.source_file) AS Source_Files,
@@ -382,7 +391,7 @@ internal static class ValidationBundleService
             SELECT
                 e.source_file AS Source_File,
                 e.data_source AS Data_Source,
-                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
+                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GoogleGeminiArtifactKind','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
                 ef.field_name AS Field_Name,
                 COUNT(*) AS Populated_Rows,
                 MIN(SUBSTR(ef.field_value,1,240)) AS Sample_Value
@@ -392,6 +401,28 @@ internal static class ValidationBundleService
               AND IFNULL(ef.field_value,'') <> ''
             GROUP BY e.source_file, e.data_source, Google_Family, ef.field_name
             ORDER BY e.source_file, e.data_source, ef.field_name;";
+        return WriteReaderCsv(cmd, outputPath);
+    }
+
+    private static int ExportGoogleFieldCollisionReview(string dbPath, string outputPath)
+    {
+        using var conn = DatabaseCore.Open(dbPath);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 0;
+        cmd.CommandText = @"
+            SELECT
+                e.source_file AS Source_File,
+                e.data_source AS Data_Source,
+                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GoogleGeminiArtifactKind','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
+                ef.field_name AS Collision_Field,
+                COUNT(*) AS Rows,
+                MIN(SUBSTR(ef.field_value,1,240)) AS Sample_Value
+            FROM events e
+            JOIN event_fields ef ON ef.event_id=e.event_id
+            WHERE (IFNULL(e.data_source,'') LIKE 'Google%' OR IFNULL(e.data_source,'') LIKE 'Gemini%' OR IFNULL(e.operation,'') LIKE 'Google%' OR IFNULL(e.operation,'') LIKE 'Gemini%')
+              AND ef.field_name IN ('ActivityParameters','ActorIpAddress','ClientIP','ClientIPAddress','DisplayTarget','Document_Type','FileName','FileSizeBytes','ObjectId','OperationOriginal','ResultStatus','SiteUrl','SourceRelativeUrl','TargetPath','UserAgent','Visibility_Change')
+            GROUP BY e.source_file, e.data_source, Google_Family, ef.field_name
+            ORDER BY Rows DESC, e.source_file, e.data_source, ef.field_name;";
         return WriteReaderCsv(cmd, outputPath);
     }
 
@@ -429,16 +460,33 @@ internal static class ValidationBundleService
             SELECT
                 e.source_file AS Source_File,
                 e.data_source AS Data_Source,
-                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
-                ef.field_name AS Preserved_Source_Column,
+                COALESCE((SELECT field_value FROM event_fields WHERE event_id=e.event_id AND field_name IN ('GoogleAuditFamily','GoogleTakeoutProductFamily','GoogleGeminiArtifactKind','GeminiArtifactKind') LIMIT 1), '') AS Google_Family,
+                gr.field_name AS Preserved_Source_Column,
                 COUNT(*) AS Rows,
-                MIN(SUBSTR(ef.field_value,1,240)) AS Sample_Value
+                MIN(SUBSTR(gr.field_value,1,240)) AS Sample_Value
             FROM events e
-            JOIN event_fields ef ON ef.event_id=e.event_id
-            WHERE (IFNULL(e.data_source,'') LIKE 'Google%' OR IFNULL(e.data_source,'') LIKE 'Gemini%' OR IFNULL(e.operation,'') LIKE 'Google%' OR IFNULL(e.operation,'') LIKE 'Gemini%')
-              AND ef.field_name NOT IN ('ParserName','ArtifactType','RecordType','Workload','Category','EventCategory','GoogleAuditFamily','GoogleAuditSourceEntry','GoogleAuditContainer','GoogleAuditRowNumber','GoogleTakeoutProductFamily','GoogleTakeoutSourceEntry','GoogleTakeoutContainer','GoogleTakeoutRowNumber','GeminiArtifactKind','GeminiSourceEntry','GeminiContainer','EventTimeBasis','EventTimeConfidence','IsBehavioralTimestamp','TimestampWarning','DisplayTarget','OriginalSourcePath','LocalEvidencePath','SourceHashSHA256','ForensicStatus','OperationOriginal','AuditData','ClientIP','ObjectId','TargetPath','FileName','SiteUrl','SourceRelativeUrl','FileSizeBytes','ResultStatus','CreationDate','GoogleRiskTransferPotential','GoogleRiskDestructionPotential','GoogleRiskAiPotential','GoogleRiskAdminPotential','GoogleRiskReason')
-            GROUP BY e.source_file, e.data_source, Google_Family, ef.field_name
-            ORDER BY e.source_file, e.data_source, ef.field_name;";
+            JOIN google_event_raw_fields gr ON gr.event_id=e.event_id
+            WHERE IFNULL(gr.field_value,'') <> ''
+            GROUP BY e.source_file, e.data_source, Google_Family, gr.field_name
+            ORDER BY e.source_file, e.data_source, gr.field_name;";
+        return WriteReaderCsv(cmd, outputPath);
+    }
+
+    private static int ExportGoogleMetadataStorageSummary(string dbPath, string outputPath)
+    {
+        using var conn = DatabaseCore.Open(dbPath);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 0;
+        cmd.CommandText = @"
+            SELECT 'events' AS Metric, CAST(COUNT(*) AS TEXT) AS Value FROM events
+            UNION ALL
+            SELECT 'event_fields', CAST(COUNT(*) AS TEXT) FROM event_fields
+            UNION ALL
+            SELECT 'google_event_raw_fields', CAST(COUNT(*) AS TEXT) FROM google_event_raw_fields
+            UNION ALL
+            SELECT 'avg_event_fields_per_event', printf('%.2f', (SELECT COUNT(*) * 1.0 FROM event_fields) / NULLIF((SELECT COUNT(*) FROM events),0))
+            UNION ALL
+            SELECT 'avg_google_raw_fields_per_event', printf('%.2f', (SELECT COUNT(*) * 1.0 FROM google_event_raw_fields) / NULLIF((SELECT COUNT(*) FROM events),0));";
         return WriteReaderCsv(cmd, outputPath);
     }
 
@@ -532,7 +580,7 @@ internal static class ValidationBundleService
         File.WriteAllText(Path.Combine(tempRoot, "vestigant_case_source_manifest.json"), JsonSerializer.Serialize(manifest, JsonOptions), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
     }
 
-    private static void WriteReadme(string tempRoot, CaseFile caseFile, int sourceRows, int parserRows, int errorRows, int eventSummaryRows, int fallbackRows, int distinctSourceRows, int candidateConflictRows, int oneDriveSummaryRows, int googleSourceRows, int googleFamilyRows, int googleSchemaRows, int googleRiskRows, int googleUnmappedRows, bool dbExists)
+    private static void WriteReadme(string tempRoot, CaseFile caseFile, int sourceRows, int parserRows, int errorRows, int eventSummaryRows, int fallbackRows, int distinctSourceRows, int candidateConflictRows, int oneDriveSummaryRows, int googleSourceRows, int googleFamilyRows, int googleSchemaRows, int googleRiskRows, int googleUnmappedRows, int googleCollisionRows, int googleStorageRows, bool dbExists)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Vestigant Triage Validation Bundle");
@@ -555,7 +603,9 @@ internal static class ValidationBundleService
         sb.AppendLine($"- vestigant_google_source_coverage.csv: {googleSourceRows:N0} rows. Google source/file/parser/operation coverage summary.");
         sb.AppendLine($"- vestigant_google_audit_family_summary.csv: {googleFamilyRows:N0} rows. Google Workspace audit, Takeout, and Gemini family count summary.");
         sb.AppendLine($"- vestigant_google_schema_coverage.csv: {googleSchemaRows:N0} rows. Preserved Google field coverage by source and family.");
-        sb.AppendLine($"- vestigant_google_unmapped_columns.csv: {googleUnmappedRows:N0} rows. Google columns preserved as metadata but not promoted into core Vestigant fields.");
+        sb.AppendLine($"- vestigant_google_unmapped_columns.csv: {googleUnmappedRows:N0} rows. Google raw source columns preserved in the non-indexed google_event_raw_fields table and not promoted into generic endpoint/O365 fields.");
+        sb.AppendLine($"- vestigant_google_field_collision_review.csv: {googleCollisionRows:N0} rows. Google rows that still populate collision-prone generic metadata fields and require review; expected target is zero except explicitly tolerated parser fields.");
+        sb.AppendLine($"- vestigant_google_metadata_storage_summary.csv: {googleStorageRows:N0} rows. Google metadata storage metrics for events, indexed metadata fields, raw source fields, and average fields per event.");
         sb.AppendLine($"- vestigant_google_risk_summary.csv: {googleRiskRows:N0} rows. Google-specific risk-hit summary after risk analysis has been run.");
         sb.AppendLine("- vestigant_case_source_manifest.json: case/source manifest for repeatable validation.");
         sb.AppendLine();

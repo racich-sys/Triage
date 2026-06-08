@@ -88,7 +88,8 @@ public class GoogleWorkspaceAuditParser : IArtifactParser
         var timestamp = TimeUtil.ParseUtc(timestampText);
         var user = GoogleSourceSupport.Get(row, family.ActorFields.Concat(new[] { "Actor", "User", "User email", "Owner", "Profile user", "Device user", "Gaia ID", "Takeout initiator" }).ToArray());
         var ip = GoogleSourceSupport.Get(row, family.IpFields.Concat(new[] { "IP address", "IP Address", "Client IP", "Remote IP", "Local IP" }).ToArray());
-        var target = GoogleSourceSupport.Get(row, family.TargetFields.Concat(new[] { "Document ID", "Title", "Target", "URL", "Resource Url", "Message ID", "Subject", "Attachment name", "Attachment URL", "Device ID", "App name", "Scope" }).ToArray());
+        var target = GoogleSourceSupport.BuildReadableTarget(family.Family, row, family.TargetFields);
+        var stableObjectId = GoogleSourceSupport.StableObjectId(row);
 
         var ev = new NormalizedEvent
         {
@@ -106,33 +107,39 @@ public class GoogleWorkspaceAuditParser : IArtifactParser
 
         ev.AdditionalFields["ParserName"] = "Google Workspace Audit";
         ev.AdditionalFields["ArtifactType"] = "Google Workspace Audit CSV";
-        ev.AdditionalFields["RecordType"] = "GoogleWorkspaceAudit";
-        ev.AdditionalFields["Workload"] = "Google Workspace";
-        ev.AdditionalFields["Category"] = "CloudAudit";
-        ev.AdditionalFields["EventCategory"] = family.Family;
+        GoogleSourceSupport.AddGoogleCoreFields(
+            ev,
+            "GoogleWorkspaceAudit",
+            family.Family,
+            ev.UserId,
+            ip,
+            GoogleSourceSupport.Get(row, "User agent", "User Agent", "User Agent String"),
+            operationRaw,
+            ev.Operation,
+            target,
+            stableObjectId,
+            timestampText,
+            sourceEntry,
+            sourceContainer,
+            rowNumber);
+        ev.AdditionalFields["GoogleWorkload"] = "Google Workspace";
+        ev.AdditionalFields["GoogleCategory"] = "CloudAudit";
+        ev.AdditionalFields["GoogleEventCategory"] = family.Family;
         ev.AdditionalFields["GoogleAuditFamily"] = family.Family;
         ev.AdditionalFields["GoogleAuditSourceEntry"] = sourceEntry;
         ev.AdditionalFields["GoogleAuditContainer"] = sourceContainer;
         ev.AdditionalFields["GoogleAuditRowNumber"] = rowNumber.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        ev.AdditionalFields["OperationOriginal"] = operationRaw;
-        ev.AdditionalFields["CreationDate"] = timestampText;
-        ev.AdditionalFields["UserAgent"] = GoogleSourceSupport.Get(row, "User agent", "User Agent", "User Agent String");
-        ev.AdditionalFields["ClientIP"] = ip;
-        ev.AdditionalFields["ObjectId"] = target;
-        ev.AdditionalFields["TargetPath"] = target;
-        ev.AdditionalFields["FileName"] = GoogleSourceSupport.FirstNonBlank(GoogleSourceSupport.Get(row, "FileName", "SourceFileName", "DestinationFileName", "Filename", "Attachment name", "Title", "Content name"), GoogleSourceSupport.InferTargetFileName(target));
-        ev.AdditionalFields["SiteUrl"] = GoogleSourceSupport.Get(row, "SiteUrl", "Site URL", "URL", "Resource Url", "Attachment URL");
-        ev.AdditionalFields["SourceRelativeUrl"] = GoogleSourceSupport.Get(row, "SourceRelativeUrl", "SourceRelativeURL", "Source Relative URL", "URL", "Target");
-        ev.AdditionalFields["FileSizeBytes"] = GoogleSourceSupport.Get(row, "FileSizeBytes", "Content size", "Number of response bytes", "Size", "File size");
-        ev.AdditionalFields["ResultStatus"] = GoogleSourceSupport.Get(row, "Event status", "Event result", "Status", "Takeout status");
-        ev.AdditionalFields["AuditData"] = SafeSerialize(row);
+        ev.AdditionalFields["GoogleOperationOriginal"] = operationRaw;
+        ev.AdditionalFields["GoogleRawSerializedRow"] = SafeSerialize(row);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleFileName", GoogleSourceSupport.FirstNonBlank(GoogleSourceSupport.Get(row, "FileName", "SourceFileName", "DestinationFileName", "Filename", "Attachment name", "Title", "Content name"), GoogleSourceSupport.InferTargetFileName(target)));
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleSiteUrl", GoogleSourceSupport.Get(row, "SiteUrl", "Site URL", "URL", "Resource Url", "Attachment URL"));
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleSourceRelativeUrl", GoogleSourceSupport.Get(row, "SourceRelativeUrl", "SourceRelativeURL", "Source Relative URL", "URL", "Target"));
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleFileSizeBytes", GoogleSourceSupport.Get(row, "FileSizeBytes", "Content size", "Number of response bytes", "Size", "File size"));
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleResultStatus", GoogleSourceSupport.Get(row, "Event status", "Event result", "Status", "Takeout status"));
         GoogleSourceSupport.AddGoogleRiskFields(ev, family.Family, row);
+        GoogleSourceSupport.PromoteWorkspaceAuditFields(ev, family.Family, row, operationRaw, ev.Operation, target, stableObjectId);
 
-        foreach (var kvp in row)
-        {
-            if (!string.IsNullOrWhiteSpace(kvp.Key) && !ev.AdditionalFields.ContainsKey(kvp.Key))
-                ev.AdditionalFields[kvp.Key] = kvp.Value ?? string.Empty;
-        }
+        GoogleSourceSupport.AddPrefixedRawFields(ev, "GoogleAuditRaw", row);
         return ev;
     }
 
