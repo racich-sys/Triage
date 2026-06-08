@@ -1,0 +1,379 @@
+{
+  "version": 7,
+  "name": "Default Risk Profile (Endpoint and Google Source Framework)",
+  "scoreThresholds": {
+    "criticalMin": 90,
+    "highMin": 70,
+    "mediumMin": 40
+  },
+  "businessHours": {
+    "startHourLocal": 7,
+    "endHourLocal": 19
+  },
+  "thresholds": {
+    "downloadBurst30Min": 10,
+    "massDownloadBurst30Min": 25,
+    "mailboxBurst30Min": 10,
+    "deletionBurst30Min": 10,
+    "afterHoursDownloadBurst30Min": 10,
+    "sequenceWindowMinutes": 60,
+    "userIpBaselineTopCount": 3
+  },
+  "personalDomains": [
+    "gmail.com",
+    "yahoo.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+    "aol.com",
+    "proton.me",
+    "protonmail.com",
+    "mail.google.com",
+    "outlook.live.com",
+    "mail.yahoo.com",
+    "mail.proton.me",
+    "mail.icloud.com",
+    "mail.aol.com",
+    "fastmail.com"
+  ],
+  "sensitiveKeywords": [
+    "confidential",
+    "trade secret",
+    "proprietary",
+    "source code",
+    "pricing",
+    "customer",
+    "client list",
+    "roadmap",
+    "patent",
+    "formula",
+    "design",
+    "finance",
+    "acquisition",
+    "strategy",
+    "board",
+    "payroll",
+    "hr",
+    "intellectual property"
+  ],
+  "antiForensicTools": [
+    "ccleaner",
+    "sdelete",
+    "eraser",
+    "cipher.exe",
+    "vssadmin",
+    "bleachbit",
+    "wipe"
+  ],
+  "transferTools": [
+    "rclone",
+    "winscp",
+    "filezilla",
+    "psftp",
+    "putty",
+    "scp",
+    "sftp",
+    "ftp.exe",
+    "azcopy",
+    "megasync",
+    "dropbox",
+    "googledrivesync",
+    "onedrive",
+    "curl.exe",
+    "wget.exe"
+  ],
+  "cloudStorageDomains": [
+    "dropbox.com",
+    "mega.nz",
+    "drive.google.com",
+    "wetransfer.com",
+    "box.com",
+    "onedrive.live.com",
+    "docs.google.com",
+    "accounts.google.com",
+    "1drv.ms",
+    "sharepoint.com",
+    "icloud.com",
+    "dropboxusercontent.com",
+    "app.box.com",
+    "mega.co.nz",
+    "pcloud.com",
+    "mediafire.com",
+    "sync.com",
+    "nextcloud",
+    "owncloud",
+    "egnyte.com"
+  ],
+  "rules": {
+    "EXF-001": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 90,
+      "description": "Personal email recipient present."
+    },
+    "EXF-002": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 95,
+      "description": "Personal email recipient plus attachment indicators."
+    },
+    "EXF-010": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 20,
+      "description": "Single file download observed."
+    },
+    "EXF-011": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 60,
+      "description": "Download burst in 30 minutes."
+    },
+    "EXF-012": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 80,
+      "description": "Mass download burst in 30 minutes."
+    },
+    "EXF-013": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 85,
+      "description": "ZIP package name present on a download/export event."
+    },
+    "EXF-014": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 75,
+      "description": "After-hours download burst."
+    },
+    "EXF-020": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 20,
+      "description": "Mailbox item access observed."
+    },
+    "EXF-021": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 65,
+      "description": "Bulk mailbox item access in 30 minutes."
+    },
+    "EXF-022": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 80,
+      "description": "Mailbox access from unusual IP."
+    },
+    "EXF-030": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 80,
+      "description": "External or anonymous sharing activity."
+    },
+    "EXF-040": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 35,
+      "description": "Print-like activity."
+    },
+    "EXF-052": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 75,
+      "description": "Sensitive keyword on access/movement/sharing event."
+    },
+    "EXF-060": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 85,
+      "description": "LNK/JumpList/RecycleBin points to Removable Media."
+    },
+    "EXF-061": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 45,
+      "description": "LNK/JumpList/RecycleBin points to Network Drive."
+    },
+    "EXF-070": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 75,
+      "description": "USB Device Connected."
+    },
+    "EXF-080": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 70,
+      "description": "Browser visit to personal cloud storage."
+    },
+    "EXF-081": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 75,
+      "description": "Browser download source indicates personal cloud storage."
+    },
+    "EXF-082": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 55,
+      "description": "SRUM network indicator references personal cloud storage."
+    },
+    "EXF-090": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 85,
+      "description": "Transfer or sync tool execution/command observed."
+    },
+    "ACC-010": {
+      "enabled": true,
+      "riskDomain": "UNAUTHORIZED_ACCESS",
+      "score": 80,
+      "description": "Cross-user personal OneDrive / SharePoint access."
+    },
+    "CON-060": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 95,
+      "description": "Hard delete."
+    },
+    "CON-061": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 70,
+      "description": "Deletion burst in 30 minutes."
+    },
+    "CON-062": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 15,
+      "description": "Recycle Bin file deleted."
+    },
+    "CON-063": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 35,
+      "description": "USN Journal delete operation."
+    },
+    "CON-070": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 100,
+      "description": "Anti-forensic or wiping tool executed."
+    },
+    "SEQ-001": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 95,
+      "description": "Mailbox access followed by personal-email send within sequence window."
+    },
+    "SEQ-002": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 100,
+      "description": "Download followed by external sharing within sequence window."
+    },
+    "SEQ-003": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 95,
+      "description": "Download followed by deletion within sequence window."
+    },
+    "SEQ-004": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 100,
+      "description": "File access/download followed by cloud storage web visit."
+    },
+    "EXF-083": {
+      "enabled": true,
+      "riskDomain": "CLOUD_SYNC_ACTIVITY",
+      "score": 45,
+      "description": "Cloud sync account/root/metadata/log artifact observed."
+    },
+    "EXF-084": {
+      "enabled": true,
+      "riskDomain": "CLOUD_SYNC_ACTIVITY",
+      "score": 55,
+      "description": "Office MRU/Backstage item references a cloud document or cloud URL."
+    },
+    "EXF-085": {
+      "enabled": true,
+      "riskDomain": "PERSONAL_EMAIL_ACTIVITY",
+      "score": 55,
+      "description": "Browser history indicates access to personal webmail."
+    },
+    "ACC-020": {
+      "enabled": true,
+      "riskDomain": "LOCAL_FILE_ACCESS",
+      "score": 20,
+      "description": "Browser/history artifact indicates local file or localhost access, commonly seen when files are opened through Explorer or a browser control."
+    },
+    "EXF-071": {
+      "enabled": true,
+      "riskDomain": "USB_ACTIVITY",
+      "score": 65,
+      "description": "SetupAPI USB storage first-install/driver-install evidence."
+    },
+    "EXF-086": {
+      "enabled": true,
+      "riskDomain": "OFFICE_FILE_ACTIVITY",
+      "score": 45,
+      "description": "OAlerts event log indicates Office file save/edit/cloud activity."
+    },
+    "EXF-072": {
+      "enabled": true,
+      "riskDomain": "USB_ACTIVITY",
+      "score": 55,
+      "description": "SetupAPI transfer-capable device/interface/driver evidence."
+    },
+    "CON-071": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 70,
+      "description": "SetupAPI possible destructive/wiping/formatting application or driver evidence."
+    },
+    "EXF-091": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 85,
+      "description": "Google Takeout request/export/download evidence."
+    },
+    "EXF-092": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 75,
+      "description": "Google Drive download/export/share/external visibility evidence."
+    },
+    "EXF-093": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 60,
+      "description": "Google Gmail access/attachment/forwarding/delegation evidence."
+    },
+    "EXF-094": {
+      "enabled": true,
+      "riskDomain": "EXFILTRATION",
+      "score": 70,
+      "description": "Google OAuth/API access to Drive/Gmail/Calendar/Contacts or similar data-bearing services."
+    },
+    "ACC-031": {
+      "enabled": true,
+      "riskDomain": "UNAUTHORIZED_ACCESS",
+      "score": 65,
+      "description": "Google login/device/user event relevant to access anomaly review."
+    },
+    "CON-082": {
+      "enabled": true,
+      "riskDomain": "CONCEALMENT",
+      "score": 70,
+      "description": "Google Vault/Admin preservation, deletion, retention, wipe, or account-control evidence."
+    },
+    "AI-011": {
+      "enabled": true,
+      "riskDomain": "AI_ACTIVITY",
+      "score": 45,
+      "description": "Google Gemini/AI use involving sensitive terms, code, document output, or session artifacts."
+    }
+  }
+}
