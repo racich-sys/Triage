@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "3_7_0"
+$Version = "3_21_0"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $script:ValidationBundleIncluded = $false
 $script:ValidationBundleFiles = New-Object System.Collections.Generic.List[string]
@@ -261,7 +261,7 @@ $Stage = Join-Path $env:TEMP "VestigantTriageUpload_v$Version`_$Stamp"
 if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 
-foreach ($name in @("ai_context.md", "PROJECT_ROADMAP_AND_CONTINUATION.md", "CHANGELOG.md", "BUILD_NOTES.md", "VALIDATION_STATUS.md", "README.md", "RUN_GOOGLE_SOURCE_TRIAGE.ps1", "RUN_GOOGLE_THIN_TEST_V3_7_0.ps1")) { Copy-IfExists (Join-Path $ProjectRoot $name) "project_docs" }
+foreach ($name in @("ai_context.md", "PROJECT_ROADMAP_AND_CONTINUATION.md", "CHANGELOG.md", "BUILD_NOTES.md", "VALIDATION_STATUS.md", "README.md", "RUN_GOOGLE_SOURCE_TRIAGE.ps1", "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1", "tools\Get-GoogleCaseSqliteMetrics.ps1")) { Copy-IfExists (Join-Path $ProjectRoot $name) "project_docs" }
 Copy-TreeFiltered -Root (Join-Path $ProjectRoot "docs") -SubDir "project_docs\docs" -Predicate { param($f,$r) $f.Name -match '(?i)\.(md|txt)$' -and $f.Length -lt 10MB }
 Copy-TreeFiltered -Root $ProjectRoot -SubDir "project_review" -Predicate ${function:Is-ProjectReviewFile}
 
@@ -275,7 +275,7 @@ if ($RequireValidationBundle -and -not $script:ValidationBundleIncluded) {
 if ($ResolvedCaseRoot) { Copy-TreeFiltered -Root $ResolvedCaseRoot -SubDir "case_review" -Predicate ${function:Is-CaseReviewFile} }
 
 $readme = @(
-    "Vestigant Triage v3.7.0 Upload Bundle",
+    "Vestigant Triage v3.21.0 Upload Bundle",
     "Generated: $(Get-Date -Format o)",
     "ProjectRoot: $ProjectRoot",
     "Requested CaseRoot: $CaseRoot",

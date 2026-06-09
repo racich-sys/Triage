@@ -1,6 +1,6 @@
-# Google Source Sample Review - v3.7.0
+# Google Source Sample Review - v3.8.0
 
-This note summarizes the uploaded Google/Takeout/Gemini sample archives reviewed before the v3.7.0 parser update.
+This note summarizes the uploaded Google/Takeout/Gemini sample archives reviewed before the v3.8.0 parser update.
 
 ## Uploaded samples reviewed
 
@@ -17,7 +17,7 @@ This note summarizes the uploaded Google/Takeout/Gemini sample archives reviewed
 - `Gemini AI session-20260608T002023Z-3-001.zip`
   - Gemini transcript RTF/PDF screenshots, code-extract `.py` files, screenshots, and output PDFs.
 
-## New v3.7.0 parser coverage
+## New v3.8.0 parser coverage
 
 - Promote Takeout My Activity HTML entries to events when `content-cell` activity blocks are present.
 - Promote Google Chat `messages.json` into message-level events with creator, message ID, topic ID, text preview, and first URL.
@@ -28,8 +28,8 @@ This note summarizes the uploaded Google/Takeout/Gemini sample archives reviewed
 
 ## Validation expectations
 
-- `RUN_GOOGLE_THIN_TEST_V3_7_0.ps1` should run with risk skipped by default.
-- A successful v3.7.0 Google thin run should show events for:
+- `RUN_GOOGLE_THIN_TEST_V3_8_0.ps1` should run with risk skipped by default.
+- A successful v3.8.0 Google thin run should show events for:
   - Google Workspace Audit CSV rows.
   - Takeout Access Log Activity CSV rows.
   - Takeout My Activity HTML rows.

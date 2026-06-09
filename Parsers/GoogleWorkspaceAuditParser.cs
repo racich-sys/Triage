@@ -16,7 +16,9 @@ public class GoogleWorkspaceAuditParser : IArtifactParser
         var name = Path.GetFileName(filePath) ?? string.Empty;
         if (GoogleSourceSupport.IsCsv(filePath))
         {
+            if (LooksLikeTakeoutAccessLogActivityPath(filePath)) return false;
             if (GoogleAuditSourceRegistry.LooksLikeGoogleAuditFileName(filePath)) return true;
+            if (!LooksLikeWorkspaceAuditPath(filePath)) return false;
             var headers = GoogleSourceSupport.ReadCsvHeaders(filePath);
             return LooksLikeAuditHeaders(headers);
         }
@@ -64,6 +66,20 @@ public class GoogleWorkspaceAuditParser : IArtifactParser
                 yield return BuildEvent(raw, family, entry.FullName, row, filePath);
             }
         }
+    }
+
+    private static bool LooksLikeWorkspaceAuditPath(string path)
+    {
+        var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
+        return p.Contains("audit and investigation") || p.Contains("google audit") || p.Contains("admin audit");
+    }
+
+    private static bool LooksLikeTakeoutAccessLogActivityPath(string path)
+    {
+        var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
+        if (!p.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!p.Contains("activities - a list of google services")) return false;
+        return p.Contains("/takeout/") || p.Contains("/access log activity/") || p.Contains("part") && p.Contains("takeout");
     }
 
     private static bool IsGoogleAuditEntry(string entryName)

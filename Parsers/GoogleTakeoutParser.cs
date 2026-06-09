@@ -14,6 +14,7 @@ namespace VestigantTriage;
 public class GoogleTakeoutParser : IArtifactParser
 {
     private const long MaxNestedZipBytes = 300L * 1024L * 1024L;
+    private const long MaxBufferedTextBytes = 64L * 1024L * 1024L;
 
     public string ParserName => "Google Takeout";
 
@@ -53,20 +54,40 @@ public class GoogleTakeoutParser : IArtifactParser
 
         if (filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            var json = File.ReadAllText(filePath);
-            foreach (var ev in BuildJsonEvents(filePath, Path.GetFileName(filePath), json)) yield return ev;
+            if (TryReadTextFile(filePath, out var json, out var fileBytes))
+            {
+                foreach (var ev in BuildJsonEvents(filePath, Path.GetFileName(filePath), json)) yield return ev;
+            }
+            else
+            {
+                yield return BuildLargeTextObservedEvent(filePath, Path.GetFileName(filePath), fileBytes, "GoogleTakeout_LargeJsonObserved");
+            }
             yield break;
         }
 
         if (filePath.EndsWith(".ics", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var ev in BuildCalendarIcsEvents(filePath, Path.GetFileName(filePath), File.ReadAllText(filePath))) yield return ev;
+            if (TryReadTextFile(filePath, out var ics, out var fileBytes))
+            {
+                foreach (var ev in BuildCalendarIcsEvents(filePath, Path.GetFileName(filePath), ics)) yield return ev;
+            }
+            else
+            {
+                yield return BuildLargeTextObservedEvent(filePath, Path.GetFileName(filePath), fileBytes, "GoogleTakeout_LargeCalendarObserved");
+            }
             yield break;
         }
 
         if (filePath.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".htm", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (var ev in BuildHtmlEvents(filePath, Path.GetFileName(filePath), File.ReadAllText(filePath))) yield return ev;
+            if (TryReadTextFile(filePath, out var html, out var fileBytes))
+            {
+                foreach (var ev in BuildHtmlEvents(filePath, Path.GetFileName(filePath), html)) yield return ev;
+            }
+            else
+            {
+                yield return BuildLargeTextObservedEvent(filePath, Path.GetFileName(filePath), fileBytes, "GoogleTakeout_LargeHtmlObserved");
+            }
             yield break;
         }
     }
@@ -78,6 +99,9 @@ public class GoogleTakeoutParser : IArtifactParser
             var entryName = entry.FullName;
             if (entryName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
             {
+                if (LooksLikeWorkspaceAuditContainer(entryName) && !LooksLikeTakeoutAccessLogActivityPath(entryName))
+                    continue;
+
                 int row = 0;
                 using var stream = entry.Open();
                 foreach (var raw in GoogleSourceSupport.ReadCsvRows(stream))
@@ -91,37 +115,57 @@ public class GoogleTakeoutParser : IArtifactParser
 
             if (entryName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             {
-                using var stream = entry.Open();
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                foreach (var ev in BuildJsonEvents(container, entryName, reader.ReadToEnd())) yield return ev;
+                if (TryReadTextEntry(entry, out var json))
+                {
+                    foreach (var ev in BuildJsonEvents(container, entryName, json)) yield return ev;
+                }
+                else
+                {
+                    yield return BuildLargeTextObservedEvent(container, entryName, entry.Length, "GoogleTakeout_LargeJsonObserved");
+                }
                 continue;
             }
 
             if (entryName.EndsWith(".ics", StringComparison.OrdinalIgnoreCase))
             {
-                using var stream = entry.Open();
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                foreach (var ev in BuildCalendarIcsEvents(container, entryName, reader.ReadToEnd())) yield return ev;
+                if (TryReadTextEntry(entry, out var ics))
+                {
+                    foreach (var ev in BuildCalendarIcsEvents(container, entryName, ics)) yield return ev;
+                }
+                else
+                {
+                    yield return BuildLargeTextObservedEvent(container, entryName, entry.Length, "GoogleTakeout_LargeCalendarObserved");
+                }
                 continue;
             }
 
             if (entryName.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || entryName.EndsWith(".htm", StringComparison.OrdinalIgnoreCase))
             {
-                using var stream = entry.Open();
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                foreach (var ev in BuildHtmlEvents(container, entryName, reader.ReadToEnd())) yield return ev;
+                if (TryReadTextEntry(entry, out var html))
+                {
+                    foreach (var ev in BuildHtmlEvents(container, entryName, html)) yield return ev;
+                }
+                else
+                {
+                    yield return BuildLargeTextObservedEvent(container, entryName, entry.Length, "GoogleTakeout_LargeHtmlObserved");
+                }
                 continue;
             }
 
             if (entryName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && depth < 2 && entry.Length > 0 && entry.Length <= MaxNestedZipBytes)
             {
                 yield return BuildEntryObservedEvent(container, entryName, entry.Length, entry.LastWriteTime.UtcDateTime, "GoogleTakeout_NestedArchiveObserved");
-                using var source = entry.Open();
-                using var ms = new MemoryStream();
-                source.CopyTo(ms);
-                ms.Position = 0;
-                using var nested = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: false);
-                foreach (var ev in ParseArchive(nested, container + "!" + entryName, log, depth + 1)) yield return ev;
+                var tempFile = Path.Combine(Path.GetTempPath(), $"Vestigant_NestedZip_{Guid.NewGuid():N}.zip");
+                try
+                {
+                    entry.ExtractToFile(tempFile, overwrite: true);
+                    using var nested = ZipFile.OpenRead(tempFile);
+                    foreach (var ev in ParseArchive(nested, container + "!" + entryName, log, depth + 1)) yield return ev;
+                }
+                finally
+                {
+                    try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+                }
                 continue;
             }
 
@@ -129,13 +173,46 @@ public class GoogleTakeoutParser : IArtifactParser
         }
     }
 
+    private static bool TryReadTextFile(string filePath, out string text, out long bytes)
+    {
+        text = string.Empty;
+        bytes = 0;
+        var fi = new FileInfo(filePath);
+        bytes = fi.Exists ? fi.Length : 0;
+        if (bytes > MaxBufferedTextBytes)
+            return false;
+        text = File.ReadAllText(filePath);
+        return true;
+    }
+
+    private static bool TryReadTextEntry(ZipArchiveEntry entry, out string text)
+    {
+        text = string.Empty;
+        if (entry.Length > MaxBufferedTextBytes)
+            return false;
+        using var stream = entry.Open();
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        text = reader.ReadToEnd();
+        return true;
+    }
+
+    private static NormalizedEvent BuildLargeTextObservedEvent(string container, string sourceEntry, long bytes, string operation)
+    {
+        var ev = BuildEntryObservedEvent(container, sourceEntry, bytes, DateTime.MinValue, operation);
+        ev.EventTimeBasis = "GoogleTakeoutLargeTextFileMetadata";
+        ev.TimestampWarning = $"Large Google Takeout text artifact was not buffered into memory; size exceeded {MaxBufferedTextBytes:N0} bytes. Use targeted streaming parser support for this artifact type.";
+        ev.AdditionalFields["GoogleTakeoutLargeTextSkipped"] = "Yes";
+        ev.AdditionalFields["GoogleTakeoutBufferedTextLimitBytes"] = MaxBufferedTextBytes.ToString(CultureInfo.InvariantCulture);
+        return ev;
+    }
+
     private static bool IsTakeoutEntry(string path)
     {
         var p = path.Replace('\\', '/').ToLowerInvariant();
-        if (LooksLikeWorkspaceAuditContainer(p)) return false;
+        if (LooksLikeWorkspaceAuditContainer(p) && !LooksLikeTakeoutAccessLogActivityPath(p)) return false;
         return p.Contains("takeout/") ||
                p.Contains("google takeout") ||
-               p.Contains("activities - a list of google services") ||
+               LooksLikeTakeoutAccessLogActivityPath(p) ||
                p.Contains("devices - a list of devices") ||
                p.Contains("mail/user settings/") ||
                p.Contains("youtube and youtube music") ||
@@ -148,6 +225,8 @@ public class GoogleTakeoutParser : IArtifactParser
                p.Contains("calendar/") ||
                p.EndsWith(".ics", StringComparison.OrdinalIgnoreCase) ||
                p.Contains("notebooklm/") ||
+               p.Contains("autofill") ||
+               p.Contains("addresses and more") ||
                p.Contains("gemini/") ||
                p.Contains("blocked addresses.json") ||
                p.Contains("vacation responder.json") ||
@@ -158,6 +237,14 @@ public class GoogleTakeoutParser : IArtifactParser
     {
         var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
         return p.Contains("audit and investigation") || p.Contains("google audit");
+    }
+
+    private static bool LooksLikeTakeoutAccessLogActivityPath(string path)
+    {
+        var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
+        if (!p.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!p.Contains("activities - a list of google services")) return false;
+        return p.Contains("/takeout/") || p.Contains("/access log activity/") || (p.Contains("part") && p.Contains("takeout"));
     }
 
     private static NormalizedEvent BuildCsvEvent(Dictionary<string, string> row, string container, string sourceEntry, int rowNumber)
@@ -283,7 +370,121 @@ public class GoogleTakeoutParser : IArtifactParser
             yield break;
         }
 
-        yield return BuildJsonObservedEvent(container, sourceEntry, rawJson);
+        if (LooksLikeAutofillJson(sourceEntry))
+        {
+            foreach (var ev in BuildAutofillEvents(container, sourceEntry, rawJson)) yield return ev;
+            yield break;
+        }
+
+        yield return BuildJsonObservedEvent(container, sourceEntry, rawJson ?? string.Empty);
+    }
+
+    private static IEnumerable<NormalizedEvent> BuildAutofillEvents(string container, string sourceEntry, string rawJson)
+    {
+        using var doc = JsonDocument.Parse(rawJson ?? string.Empty);
+        var rows = new List<(string Path, string Value)>();
+        CollectAutofillLeaves(doc.RootElement, string.Empty, rows, 5000);
+
+        var emitted = 0;
+        foreach (var item in rows)
+        {
+            if (string.IsNullOrWhiteSpace(item.Value)) continue;
+            var type = ClassifyAutofillField(item.Path, item.Value);
+            if (type == "Other") continue;
+            emitted++;
+            var target = Truncate(item.Value, 240);
+            var operation = type switch
+            {
+                "Address" => "GoogleTakeout_AddressObserved",
+                "Phone" => "GoogleTakeout_PhoneObserved",
+                "Note" => "GoogleTakeout_NoteObserved",
+                "ShippingAddress" => "GoogleTakeout_AddressObserved",
+                _ => "GoogleTakeout_AutofillObserved"
+            };
+            var raw = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["AutofillPath"] = item.Path,
+                ["AutofillValue"] = item.Value,
+                ["AutofillType"] = type,
+                ["SourceEntry"] = sourceEntry
+            };
+
+            var ev = new NormalizedEvent
+            {
+                DataSource = "Google Takeout - Autofill",
+                UserId = "Unknown",
+                Operation = operation,
+                ObjectPath = target,
+                TimestampUtc = DateTime.MinValue,
+                EventTimeBasis = "GoogleTakeoutAutofillExportMetadata",
+                EventTimeConfidence = "MetadataOnly",
+                IsBehavioralTimestamp = false,
+                TimestampWarning = "Autofill export value is review-relevant account data; export/archive timestamp is not behavioral use without correlation."
+            };
+
+            AddTakeoutBase(ev, "Google Autofill", "Autofill", "CloudAccountData", container, sourceEntry, emitted, string.Empty, target, raw);
+            GoogleSourceSupport.AddGoogleField(ev, "GoogleAutofillType", type);
+            GoogleSourceSupport.AddGoogleField(ev, "GoogleAutofillPath", item.Path);
+            GoogleSourceSupport.AddGoogleField(ev, "GoogleAutofillValue", Truncate(item.Value, 4000));
+            GoogleSourceSupport.AddGoogleRiskFields(ev, "Autofill", raw);
+            GoogleSourceSupport.AddPrefixedRawFields(ev, "GoogleTakeoutRaw", raw);
+            yield return ev;
+        }
+
+        if (emitted == 0)
+            yield return BuildJsonObservedEvent(container, sourceEntry, rawJson ?? string.Empty);
+    }
+
+    private static bool LooksLikeAutofillJson(string sourceEntry)
+    {
+        var p = (sourceEntry ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
+        return p.Contains("autofill") || p.Contains("addresses and more");
+    }
+
+    private static void CollectAutofillLeaves(JsonElement element, string path, List<(string Path, string Value)> rows, int maxRows)
+    {
+        if (rows.Count >= maxRows) return;
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    var childPath = string.IsNullOrWhiteSpace(path) ? prop.Name : path + "." + prop.Name;
+                    CollectAutofillLeaves(prop.Value, childPath, rows, maxRows);
+                    if (rows.Count >= maxRows) return;
+                }
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var child in element.EnumerateArray())
+                {
+                    CollectAutofillLeaves(child, path + "[" + index.ToString(CultureInfo.InvariantCulture) + "]", rows, maxRows);
+                    index++;
+                    if (rows.Count >= maxRows) return;
+                }
+                break;
+            case JsonValueKind.String:
+                var value = GoogleSourceSupport.Clean(element.GetString());
+                if (!string.IsNullOrWhiteSpace(value)) rows.Add((path, value));
+                break;
+            case JsonValueKind.Number:
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                rows.Add((path, GoogleSourceSupport.Clean(element.ToString())));
+                break;
+        }
+    }
+
+    private static string ClassifyAutofillField(string path, string value)
+    {
+        var p = (path ?? string.Empty).ToLowerInvariant();
+        var v = (value ?? string.Empty).Trim();
+        if (p.Contains("phone") || Regex.IsMatch(v, @"^\+?[0-9][0-9 .()\-]{6,}$")) return "Phone";
+        if (p.Contains("ship") && (p.Contains("address") || p.Contains("street") || p.Contains("city"))) return "ShippingAddress";
+        if (p.Contains("address") || p.Contains("street") || p.Contains("city") || p.Contains("state") || p.Contains("postal") || p.Contains("zip")) return "Address";
+        if (p.Contains("note") || p.Contains("memo") || p.Contains("comment")) return "Note";
+        if (p.Contains("name") || p.Contains("company") || p.Contains("email")) return "FormEntry";
+        return "Other";
     }
 
     private static IEnumerable<NormalizedEvent> BuildChatMessageEvents(string container, string sourceEntry, string rawJson)
@@ -291,7 +492,7 @@ public class GoogleTakeoutParser : IArtifactParser
         using var doc = JsonDocument.Parse(rawJson);
         if (!doc.RootElement.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
         {
-            yield return BuildJsonObservedEvent(container, sourceEntry, rawJson);
+            yield return BuildJsonObservedEvent(container, sourceEntry, rawJson ?? string.Empty);
             yield break;
         }
 
@@ -312,7 +513,7 @@ public class GoogleTakeoutParser : IArtifactParser
                 creatorType = GetJsonString(creator, "user_type");
             }
 
-            var target = GoogleSourceSupport.FirstNonBlank(FirstUrlFromChatMessage(msg), Truncate(text, 180), messageId, sourceEntry);
+            var target = GoogleSourceSupport.FirstNonBlank(topicId, messageId, FirstUrlFromChatMessage(msg), Truncate(text, 180), sourceEntry);
             var ev = new NormalizedEvent
             {
                 DataSource = "Google Takeout - Google Chat",
@@ -341,7 +542,8 @@ public class GoogleTakeoutParser : IArtifactParser
             GoogleSourceSupport.AddGoogleField(ev, "GoogleChatTopicId", topicId);
             GoogleSourceSupport.AddGoogleField(ev, "GoogleChatCreatorName", creatorName);
             GoogleSourceSupport.AddGoogleField(ev, "GoogleChatCreatorType", creatorType);
-            GoogleSourceSupport.AddGoogleField(ev, "GoogleChatMessageText", Truncate(text, 2000));
+            GoogleSourceSupport.AddGoogleField(ev, "GoogleChatThreadOrTopicId", GoogleSourceSupport.FirstNonBlank(topicId, messageId));
+            GoogleSourceSupport.AddGoogleField(ev, "GoogleChatMessageText", Truncate(text, 4000));
             GoogleSourceSupport.AddGoogleField(ev, "GoogleChatFirstUrl", FirstUrlFromChatMessage(msg));
             GoogleSourceSupport.AddGoogleRiskFields(ev, "Chat", raw);
             GoogleSourceSupport.AddPrefixedRawFields(ev, "GoogleTakeoutRaw", raw);
@@ -349,8 +551,9 @@ public class GoogleTakeoutParser : IArtifactParser
         }
     }
 
-    private static IEnumerable<NormalizedEvent> BuildHtmlEvents(string container, string sourceEntry, string html)
+    private static IEnumerable<NormalizedEvent> BuildHtmlEvents(string container, string sourceEntry, string? html)
     {
+        html ??= string.Empty;
         if (sourceEntry.Contains("MyActivity", StringComparison.OrdinalIgnoreCase) || sourceEntry.Contains("My Activity", StringComparison.OrdinalIgnoreCase))
         {
             foreach (var ev in BuildMyActivityHtmlEvents(container, sourceEntry, html)) yield return ev;
@@ -362,8 +565,9 @@ public class GoogleTakeoutParser : IArtifactParser
 
     private static IEnumerable<NormalizedEvent> BuildMyActivityHtmlEvents(string container, string sourceEntry, string html)
     {
+        html ??= string.Empty;
         var family = GoogleSourceSupport.FamilyFromTakeoutPath(sourceEntry);
-        var matches = Regex.Matches(html ?? string.Empty, @"<div[^>]*class=""[^""]*content-cell[^""]*""[^>]*>(.*?)</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var matches = Regex.Matches(html, @"<div[^>]*class=""[^""]*content-cell[^""]*""[^>]*>(.*?)</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         if (matches.Count == 0)
         {
             yield return BuildHtmlObservedEvent(container, sourceEntry, html);
@@ -545,6 +749,64 @@ public class GoogleTakeoutParser : IArtifactParser
         ev.AdditionalFields["GoogleTakeoutContainer"] = container;
         ev.AdditionalFields["GoogleTakeoutRowNumber"] = rowNumber.ToString(CultureInfo.InvariantCulture);
         ev.AdditionalFields["GoogleRawSerializedRow"] = SafeSerialize(raw);
+
+        var ua = GoogleSourceSupport.Get(raw, "User Agent String", "User Agent");
+        AddDeviceAttributionFields(ev, ua);
+        AddIpAttributionFields(ev, ev.ClientIp);
+    }
+
+    private static void AddDeviceAttributionFields(NormalizedEvent ev, string userAgent)
+    {
+        userAgent = GoogleSourceSupport.Clean(userAgent);
+        if (string.IsNullOrWhiteSpace(userAgent)) return;
+        var lower = userAgent.ToLowerInvariant();
+        var deviceType = lower.Contains("mobile") || lower.Contains("iphone") || lower.Contains("android") || lower.Contains("ios") ? "Mobile" :
+                         lower.Contains("tablet") || lower.Contains("ipad") ? "Tablet" :
+                         lower.Contains("windows") || lower.Contains("macintosh") || lower.Contains("linux") ? "Desktop" :
+                         lower.Contains("apple_native_app") ? "Mobile" : "Unknown";
+        var os = lower.Contains("ios") || lower.Contains("iphone") || lower.Contains("ipad") || lower.Contains("apple_native_app") ? "iOS" :
+                 lower.Contains("android") ? "Android" :
+                 lower.Contains("windows") ? "Windows" :
+                 lower.Contains("mac os") || lower.Contains("macintosh") ? "macOS" :
+                 lower.Contains("linux") ? "Linux" : "Unknown";
+        var app = lower.Contains("chrome") ? "Chrome" :
+                  lower.Contains("safari") ? "Safari" :
+                  lower.Contains("firefox") ? "Firefox" :
+                  lower.Contains("edge") ? "Edge" :
+                  lower.Contains("apple_native_app") ? "APPLE_NATIVE_APP" : "Unknown";
+        var browser = (app == "Chrome" || app == "Safari" || app == "Firefox" || app == "Edge") ? app : string.Empty;
+
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleDeviceType", deviceType);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleOperatingSystem", os);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleClientApplication", app);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleBrowserFamily", browser);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleUserAgentRaw", userAgent);
+    }
+
+    private static void AddIpAttributionFields(NormalizedEvent ev, string ip)
+    {
+        ip = GoogleSourceSupport.Clean(ip);
+        if (string.IsNullOrWhiteSpace(ip)) return;
+        var classification = ClassifyIp(ip);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleSourceIP", ip);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleIPClassification", classification);
+        GoogleSourceSupport.AddGoogleField(ev, "GoogleNetworkType", classification == "Public" ? "Internet" : classification);
+    }
+
+    private static string ClassifyIp(string ip)
+    {
+        if (!System.Net.IPAddress.TryParse(ip, out var parsed)) return "Unknown";
+        var bytes = parsed.GetAddressBytes();
+        if (System.Net.IPAddress.IsLoopback(parsed)) return "Loopback";
+        if (bytes.Length == 4)
+        {
+            if (bytes[0] == 10) return "Private";
+            if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return "Private";
+            if (bytes[0] == 192 && bytes[1] == 168) return "Private";
+            if (bytes[0] == 169 && bytes[1] == 254) return "LinkLocal";
+        }
+        if (bytes.Length == 16 && (bytes[0] & 0xfe) == 0xfc) return "Private";
+        return "Public";
     }
 
     private static string SafeSerialize(IDictionary<string, string> row)
@@ -588,19 +850,26 @@ public class GoogleTakeoutParser : IArtifactParser
     private static string ExtractActivityTimestampText(string text)
     {
         var normalized = (text ?? string.Empty).Replace('\u00A0', ' ').Replace('\u202F', ' ');
-        var match = Regex.Match(normalized, @"[A-Z][a-z]{2,9}\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)\s*(?:UTC|GMT|IDT|EST|EDT|CST|CDT|MST|MDT|PST|PDT)?", RegexOptions.IgnoreCase);
+        var match = Regex.Match(normalized, @"(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+)?[A-Z][a-z]{2,9}\s+\d{1,2},\s+\d{4},\s+(?:at\s+)?\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)\s*(?:UTC|GMT|IDT|IST|EST|EDT|CST|CDT|MST|MDT|PST|PDT)?", RegexOptions.IgnoreCase);
         return match.Success ? match.Value.Trim() : string.Empty;
     }
 
     private static DateTime? ParseGoogleTime(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
-        var text = value.Trim().Replace('\u00A0', ' ').Replace('\u202F', ' ');
+
+        var text = value.Trim()
+            .Replace('\u00A0', ' ')
+            .Replace('\u202F', ' ')
+            .Replace(" at ", " ", StringComparison.OrdinalIgnoreCase);
         text = Regex.Replace(text, @"\s+", " ");
+        text = Regex.Replace(text, @"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+", string.Empty, RegexOptions.IgnoreCase);
+
         var mapped = text;
         mapped = Regex.Replace(mapped, @"\bUTC\b", "+00:00", RegexOptions.IgnoreCase);
         mapped = Regex.Replace(mapped, @"\bGMT\b", "+00:00", RegexOptions.IgnoreCase);
         mapped = Regex.Replace(mapped, @"\bIDT\b", "+03:00", RegexOptions.IgnoreCase);
+        mapped = Regex.Replace(mapped, @"\bIST\b", "+05:30", RegexOptions.IgnoreCase);
         mapped = Regex.Replace(mapped, @"\bEDT\b", "-04:00", RegexOptions.IgnoreCase);
         mapped = Regex.Replace(mapped, @"\bEST\b", "-05:00", RegexOptions.IgnoreCase);
         mapped = Regex.Replace(mapped, @"\bCDT\b", "-05:00", RegexOptions.IgnoreCase);
@@ -613,8 +882,29 @@ public class GoogleTakeoutParser : IArtifactParser
         var parsed = TimeUtil.ParseUtc(mapped) ?? TimeUtil.ParseUtc(text);
         if (parsed.HasValue) return parsed.Value;
 
-        if (DateTimeOffset.TryParse(mapped, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
-            return dto.UtcDateTime;
+        string[] googleFormats =
+        {
+            "MMMM d, yyyy h:mm:ss tt zzz",
+            "MMM d, yyyy h:mm:ss tt zzz",
+            "MMMM d, yyyy, h:mm:ss tt zzz",
+            "MMM d, yyyy, h:mm:ss tt zzz",
+            "MMMM dd, yyyy h:mm:ss tt zzz",
+            "MMM dd, yyyy h:mm:ss tt zzz",
+            "MMMM dd, yyyy, h:mm:ss tt zzz",
+            "MMM dd, yyyy, h:mm:ss tt zzz",
+            "yyyy-MM-dd HH:mm:ss zzz",
+            "yyyy-MM-dd HH:mm:ss 'UTC'"
+        };
+
+        foreach (var candidate in new[] { mapped, text }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (DateTimeOffset.TryParseExact(candidate, googleFormats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var exactDto))
+                return exactDto.UtcDateTime;
+
+            if (DateTimeOffset.TryParse(candidate, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
+                return dto.UtcDateTime;
+        }
+
         return null;
     }
 

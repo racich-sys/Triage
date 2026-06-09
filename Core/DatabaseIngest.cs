@@ -155,6 +155,9 @@ VALUES ($event_id, $raw_family, $field_name, $field_value, $source_file, $source
 
                 if (isGoogleSource && IsGoogleRawField(kvp.Key))
                 {
+                    if (ShouldSkipGoogleRawStorageField(kvp.Key, kvp.Value, normEvent, creationDateUtc, workload, category, clientIp, userAgent, objectId, siteUrl, sourceRelativeUrl, fileName, resultStatus))
+                        continue;
+
                     insertGoogleRawField.Parameters.Clear();
                     insertGoogleRawField.Parameters.AddWithValue("$event_id", eventId);
                     insertGoogleRawField.Parameters.AddWithValue("$raw_family", GoogleRawFamily(kvp.Key));
@@ -206,6 +209,87 @@ VALUES ($event_id, $raw_family, $field_name, $field_value, $source_file, $source
         return "GoogleRaw";
     }
 
+    private static bool ShouldSkipGoogleRawStorageField(
+        string key,
+        string value,
+        NormalizedEvent ev,
+        string creationDateUtc,
+        string workload,
+        string category,
+        string clientIp,
+        string userAgent,
+        string objectId,
+        string siteUrl,
+        string sourceRelativeUrl,
+        string fileName,
+        string resultStatus)
+    {
+        // Google raw fields remain available for unmapped-column review, but raw
+        // source columns that are already promoted into the event row or reviewed
+        // Google canonical metadata do not need to be stored again per event.
+        // This keeps thin-test databases smaller while preserving the source
+        // schema-separation principle from v3.6.x.
+        var rawName = key;
+        if (rawName.StartsWith("GoogleAuditRaw_", StringComparison.OrdinalIgnoreCase))
+            rawName = rawName.Substring("GoogleAuditRaw_".Length);
+        else if (rawName.StartsWith("GoogleTakeoutRaw_", StringComparison.OrdinalIgnoreCase))
+            rawName = rawName.Substring("GoogleTakeoutRaw_".Length);
+
+        var canonical = NormalizeRawFieldName(rawName);
+
+        if (canonical.Length == 0)
+            return true;
+
+        if (canonical is "date" or "timestamp" or "time" or "created" or "modified" or "activitytimestamp")
+            return true;
+
+        // v3.21.0: remove raw Google fields that were shown by the prior
+        // thin run to be high-volume, low-cardinality, and already represented
+        // by normalized event columns, indexed Google summaries, or the event
+        // raw JSON/source row. This reduces google_event_raw_fields without
+        // deleting the source-row reconstruction path.
+        if (ShouldSkipLowInformationGoogleRawField(canonical, value))
+            return true;
+
+        if (canonical is "actor" or "user" or "email" or "owner")
+            return SameText(value, ev.UserId);
+
+        if (canonical is "event" or "eventname" or "name" or "operation" or "activity")
+            return true;
+
+        if (canonical is "description" or "target" or "title" or "url" or "doc_title" or "documenttitle" or "resource" or "itemname")
+            return true;
+
+        if (canonical is "ipaddress" or "ip" or "clientip" or "sourceip")
+            return SameText(value, clientIp);
+
+        if (canonical is "useragent" or "useragentstring")
+            return SameText(value, userAgent);
+
+        if (canonical is "applicationname" or "appname" or "product" or "service")
+            return SameText(value, workload) || SameText(value, category);
+
+        if (canonical is "result" or "resultstatus" or "status")
+            return SameText(value, resultStatus);
+
+        if (canonical is "recurringevent" or "clientsideencrypted" or "notificationmethod" or "notificationtype")
+            return true;
+
+        if (canonical is "doctype" or "documenttype" or "mimetype" or "visibility" or "oldvalue" or "newvalue" or "scope" or "oauthclientid" or "clienttype" or "networkinfo" or "serviceaccount" or "apikind" or "accesslevel" or "calendarid" or "eventid" or "eventtype" or "guestresponsestatus")
+            return false;
+
+        return false;
+    }
+
+    private static string NormalizeRawFieldName(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return string.Empty;
+
+        var chars = key.Where(char.IsLetterOrDigit).ToArray();
+        return new string(chars).ToLowerInvariant();
+    }
+
     private static bool ShouldSkipGoogleMetadataField(
         string key,
         string value,
@@ -225,6 +309,15 @@ VALUES ($event_id, $raw_family, $field_name, $field_value, $source_file, $source
             return false;
 
         if (key.Equals("GoogleRawSerializedRow", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // v3.21.0: keep repeated Google low-cardinality values out of the
+        // generic indexed event_fields table when the same meaning is already
+        // stored in the events row, source/provenance columns, or validation
+        // summaries. This preserves forensic reviewability while preventing
+        // high-volume Google Activity/Audit rows from dominating indexed
+        // metadata storage.
+        if (ShouldSkipLowCardinalityGoogleIndexedField(key, value, ev, category))
             return true;
 
         if (key.Equals("GoogleMasterExportSchema", StringComparison.OrdinalIgnoreCase))
@@ -268,6 +361,71 @@ VALUES ($event_id, $raw_family, $field_name, $field_value, $source_file, $source
 
         if (key.Equals("GoogleResultStatus", StringComparison.OrdinalIgnoreCase))
             return SameText(value, resultStatus);
+
+        return false;
+    }
+
+    private static bool ShouldSkipLowInformationGoogleRawField(string canonical, string value)
+    {
+        if (string.IsNullOrWhiteSpace(canonical))
+            return true;
+
+        var trimmed = (value ?? string.Empty).Trim();
+        var lowInformationValue = trimmed.Length == 0 ||
+            trimmed.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("No", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("Off", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("0", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("0.0", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("Encryption not required", StringComparison.OrdinalIgnoreCase);
+
+        if (lowInformationValue && (canonical is "isnonroutableipaddress" or "billable" or "encrypted" or "impersonation" or "visitor"))
+            return true;
+
+        if (lowInformationValue && (canonical is
+            "copytype" or "deletionreason" or "documenttype" or "encryptionpolicy" or
+            "encryptionchange" or "executiontrigger" or "membershipchangetype" or
+            "newpublishvisibilityvalue" or "oldpublishvisibilityvalue" or "querytype" or
+            "requestedaccessrole" or "scriptcontainerapp" or "scripttriggersourceapp" or
+            "scripttriggertype" or "settingschangetype" or "visibility" or
+            "esignaturereviewerdecision" or "esignaturestatus" or "confidentialmode" or
+            "spamclassification" or "spamclassificationreason" or "trafficsource" or
+            "clienttype" or "configurationsource" or "accesslevel" or "eventtype" or
+            "guestresponsestatus" or "apikind"))
+            return true;
+
+        if (canonical is "productname" or "subproductname")
+            return true;
+
+        return false;
+    }
+
+    private static bool ShouldSkipLowCardinalityGoogleIndexedField(string key, string value, NormalizedEvent ev, string category)
+    {
+        if (key.Equals("EventTimeBasis", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("EventTimeConfidence", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("IsBehavioralTimestamp", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (key.Equals("ArtifactType", StringComparison.OrdinalIgnoreCase))
+            return ev.DataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase) ||
+                   ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase);
+
+        if (key.Equals("GoogleEventCategory", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, category);
+
+        if (key.Equals("GoogleOperationRaw", StringComparison.OrdinalIgnoreCase))
+            return SameText(value, ev.Operation) || NormalizeRawFieldName(value) == NormalizeRawFieldName(ev.Operation);
+
+        if (key.Equals("GoogleRecordType", StringComparison.OrdinalIgnoreCase))
+            return value.Equals("GoogleTakeout", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("GoogleWorkspaceAudit", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("GeminiSession", StringComparison.OrdinalIgnoreCase);
+
+        if (key.Equals("GoogleIPClassification", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("GoogleNetworkType", StringComparison.OrdinalIgnoreCase))
+            return true;
 
         return false;
     }

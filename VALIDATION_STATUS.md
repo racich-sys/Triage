@@ -1,18 +1,23 @@
-# Validation Status - Vestigant Triage v3.6.3.1
+# Build Notes - Vestigant Triage v3.21.0
 
-Assistant-side validation only. The assistant environment does not contain the Windows .NET SDK/runtime or the local Google test folder at `E:\0445_0001`.
+Prepared from the verified v3.19.0 source package available in this chat workspace.
 
-Windows validation required:
+This environment cannot verify `dotnet build` or `dotnet publish` because the .NET SDK is not installed here. Windows validation is required.
+
+## Required Windows commands
 
 ```powershell
 Set-Location D:\Downloads
-Get-FileHash .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -Algorithm SHA256
-Expand-Archive -LiteralPath .\VestigantTriage_v3_6_3_1_google_logging_risk_progress_hotfix.zip -DestinationPath T:\ -Force
-& "T:\VestigantTriage_v3_6_3_1\RUN_GOOGLE_SOURCE_TRIAGE.ps1" -GoogleRoot "E:\0445_0001"
+Remove-Item -LiteralPath T:\VestigantTriage_v3_21_0 -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -LiteralPath .\VestigantTriage_v3_21_0_risk_sequence_export_safeguards.zip -DestinationPath T:\ -Force
+Set-Location T:\VestigantTriage_v3_21_0
+
+powershell -ExecutionPolicy Bypass -File .\tools\Build-And-Validate-VestigantTriage.ps1 -Publish
+powershell -ExecutionPolicy Bypass -File .\RUN_GOOGLE_THIN_TEST_V3_21_0.ps1 -CleanCase
 ```
 
-Expected upload:
+## Risk + duplicate validation
 
-```text
-D:\Downloads\Upload_VestigantTriage_v3_6_3_1_*.zip
+```powershell
+powershell -ExecutionPolicy Bypass -File .\RUN_GOOGLE_THIN_TEST_V3_21_0.ps1 -CleanCase -IncludeRisk -IncludeDuplicateGoogleArchives
 ```

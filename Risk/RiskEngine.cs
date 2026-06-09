@@ -50,9 +50,9 @@ internal static class RiskEngine
         var userIpBaselines = BuildUserIpBaselines(events, config);
         log($"Risk phase complete: user/IP baselines in {sw.Elapsed.TotalSeconds:N1}s.");
         log("Risk phase: building 30-minute operation burst indexes.");
-        var userDownloadBursts = BuildOperationBursts(events, new[] { "FileDownloaded" });
-        var userMailboxBursts = BuildOperationBursts(events, new[] { "MailItemsAccessed" });
-        var userDeleteBursts = BuildOperationBursts(events, new[] { "MoveToDeletedItems", "HardDelete", "FileDeleted", "File_Delete" });
+        var userDownloadBursts = BuildOperationBursts(events, new[] { "FileDownloaded", "GoogleDrive_FileExported", "GoogleTakeout_UserDownloaded", "GoogleGmail_AttachmentDownloaded", "GoogleTakeout_UserInitiated", "GoogleTakeout_EmailMessageObserved" });
+        var userMailboxBursts = BuildOperationBursts(events, new[] { "MailItemsAccessed", "GoogleGmail_MessageContentAccessed", "GoogleGmail_MessageOpened", "GoogleTakeout_EmailMessageObserved" });
+        var userDeleteBursts = BuildOperationBursts(events, new[] { "MoveToDeletedItems", "HardDelete", "FileDeleted", "File_Delete", "FileTrashed", "GoogleDrive_FileTrashed", "GoogleGmail_MessageMovedToTrash", "GoogleGmail_MessageDeleted" });
         log($"Risk phase complete: operation burst indexes in {sw.Elapsed.TotalSeconds:N1}s.");
 
         var processed = 0;
@@ -139,27 +139,30 @@ internal static class RiskEngine
             var executionOrCommand = (ev.DataSource == "Prefetch" || ev.DataSource == "Registry_UserAssist" || ev.DataSource == "Registry_BAM" || ev.DataSource == "Registry_DAM" || ev.DataSource == "AmCache" || ev.DataSource == "PowerShell_History" || ev.DataSource == "PowerShell_Transcript" || (ev.DataSource == "WinEventLog" && ev.Operation.Contains("PowerShell", StringComparison.OrdinalIgnoreCase))) && ContainsKeyword(config.TransferTools, executionText);
             AddIfRule(hits, config, "EXF-090", ev, executionOrCommand, "Transfer, sync, or command-line data movement tool observed.", executionText);
 
-            var googleText = string.Join(" ", new[] { ev.Operation, ev.ObjectId, ev.SourceRelativeUrl, ev.PathHint, ev.FileName, ev.EmailSubject, ev.RawJson }.Where(v => !string.IsNullOrWhiteSpace(v)));
             var isGoogleSource = ev.DataSource.StartsWith("Google", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase);
-            var isGoogleDrive = isGoogleSource && (ev.DataSource.Contains("Drive", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleDrive", StringComparison.OrdinalIgnoreCase));
-            var isGoogleGmail = isGoogleSource && (ev.DataSource.Contains("Gmail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleGmail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Equals("MailItemsAccessed", StringComparison.OrdinalIgnoreCase));
-            var isGoogleOAuth = isGoogleSource && (ev.DataSource.Contains("OAuth", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleOAuth", StringComparison.OrdinalIgnoreCase));
-            var isGoogleTakeout = isGoogleSource && (ev.DataSource.Contains("Takeout", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleTakeout", StringComparison.OrdinalIgnoreCase));
-            var isGoogleGemini = isGoogleSource && (ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleGemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GeminiSession", StringComparison.OrdinalIgnoreCase));
-            var isGoogleVaultOrAdmin = isGoogleSource && (ev.DataSource.Contains("Vault", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Admin", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleVault", StringComparison.OrdinalIgnoreCase));
-            AddIfRule(hits, config, "EXF-091", ev, isGoogleTakeout && ContainsAny(googleText, "request", "download", "created", "completed", "export", "destination", "takeout"), "Google Takeout request/export/download-related evidence observed.", googleText);
-            AddIfRule(hits, config, "EXF-092", ev, isGoogleDrive && ContainsAny(googleText, "download", "export", "share", "sharing", "visibility", "external", "link", "copy", "access scope", "accessscope", "UserSharingPermissions", "VisibilityChanged"), "Google Drive download/export/share/visibility/access-scope event observed.", googleText);
-            AddIfRule(hits, config, "EXF-093", ev, isGoogleGmail && ContainsAny(googleText, "attachment", "forward", "delegate", "routing", "send", "download", "content accessed", "MessageContentAccessed", "AttachmentDownloaded", "AttachmentSavedToDrive"), "Google Gmail attachment/content/forwarding/delegation/routing event observed.", googleText);
-            AddIfRule(hits, config, "EXF-094", ev, isGoogleOAuth && ContainsAny(googleText, "drive", "gmail", "calendar", "contacts", "scope", "api", "token"), "Google OAuth/API grant or activity involving data-bearing services observed.", googleText);
-            AddIfRule(hits, config, "ACC-031", ev, isGoogleSource && (ev.DataSource.Contains("User", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Device", StringComparison.OrdinalIgnoreCase)) && ContainsAny(googleText, "suspicious", "failed", "new device", "challenge", "login", "compromised"), "Google login/device/user event relevant to access review observed.", googleText);
-            AddIfRule(hits, config, "CON-082", ev, isGoogleVaultOrAdmin && ContainsAny(googleText, "vault", "hold", "retention", "delete", "remove", "purge", "suspend", "reset", "wipe", "rule", "setting"), "Google Vault/Admin control event relevant to preservation, deletion, or account-control review observed.", googleText);
-            AddIfRule(hits, config, "AI-011", ev, isGoogleGemini && (ContainsSensitiveKeyword(config, googleText) || ContainsAny(googleText, "code", "generate", "summarize", "file", "document", "prompt", "transcript")), "Google Gemini/AI artifact or audit event requiring sensitive-use review.", googleText);
+            if (isGoogleSource)
+            {
+                var transferRisk = IsYes(ev.GoogleRiskTransferPotential);
+                var destructionRisk = IsYes(ev.GoogleRiskDestructionPotential);
+                var aiRisk = IsYes(ev.GoogleRiskAiPotential);
+                var adminRisk = IsYes(ev.GoogleRiskAdminPotential);
+                var googleRiskReason = FirstNonBlank(ev.GoogleRiskReason, "Google source risk indicator from parser metadata.");
+                var googleTarget = FirstNonBlank(ev.ObjectId, ev.PathHint, ev.SourceRelativeUrl, ev.FileName, ev.EmailSubject, ev.SourceFile);
+
+                AddIfRule(hits, config, "EXF-091", ev, transferRisk && (ev.DataSource.Contains("Takeout", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Takeout", StringComparison.OrdinalIgnoreCase)), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "EXF-092", ev, transferRisk && (ev.DataSource.Contains("Drive", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Drive", StringComparison.OrdinalIgnoreCase)), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "EXF-093", ev, transferRisk && (ev.DataSource.Contains("Gmail", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Mail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Gmail", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Email", StringComparison.OrdinalIgnoreCase)), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "EXF-094", ev, transferRisk && (ev.DataSource.Contains("OAuth", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("OAuth", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("API", StringComparison.OrdinalIgnoreCase)), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "ACC-031", ev, adminRisk && (ev.DataSource.Contains("User", StringComparison.OrdinalIgnoreCase) || ev.DataSource.Contains("Device", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Login", StringComparison.OrdinalIgnoreCase)), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "CON-082", ev, destructionRisk || adminRisk || ev.DataSource.Contains("Vault", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GoogleVault", StringComparison.OrdinalIgnoreCase), googleRiskReason, googleTarget);
+                AddIfRule(hits, config, "AI-011", ev, aiRisk || ev.DataSource.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("Gemini", StringComparison.OrdinalIgnoreCase) || ev.Operation.Contains("GeminiSession", StringComparison.OrdinalIgnoreCase), googleRiskReason, googleTarget);
+            }
 
         }
 
         log($"Risk phase complete: per-event rules evaluated for {events.Count:N0} events in {sw.Elapsed.TotalSeconds:N1}s; hits_before_sequences={hits.Count:N0}.");
         log("Risk phase: detecting multi-event sequences.");
-        var sequenceHits = DetectSequences(events, config);
+        var sequenceHits = DetectSequences(events, config, log, progress, sw);
         log($"Risk phase complete: sequence detection produced {sequenceHits.Count:N0} hits in {sw.Elapsed.TotalSeconds:N1}s.");
         hits.AddRange(sequenceHits);
         log("Risk phase: deduplicating risk hits.");
@@ -330,6 +333,11 @@ internal static class RiskEngine
             if (loaded.Thresholds.DeletionBurst30Min > 0) target.Thresholds.DeletionBurst30Min = loaded.Thresholds.DeletionBurst30Min;
             if (loaded.Thresholds.AfterHoursDownloadBurst30Min > 0) target.Thresholds.AfterHoursDownloadBurst30Min = loaded.Thresholds.AfterHoursDownloadBurst30Min;
             if (loaded.Thresholds.SequenceWindowMinutes > 0) target.Thresholds.SequenceWindowMinutes = loaded.Thresholds.SequenceWindowMinutes;
+            if (loaded.Thresholds.SequenceMaxComparisons > 0) target.Thresholds.SequenceMaxComparisons = loaded.Thresholds.SequenceMaxComparisons;
+            if (loaded.Thresholds.SequenceMaxHits > 0) target.Thresholds.SequenceMaxHits = loaded.Thresholds.SequenceMaxHits;
+            if (loaded.Thresholds.SequenceProgressEveryComparisons > 0) target.Thresholds.SequenceProgressEveryComparisons = loaded.Thresholds.SequenceProgressEveryComparisons;
+            if (loaded.Thresholds.SequenceMaxCandidatesPerUser > 0) target.Thresholds.SequenceMaxCandidatesPerUser = loaded.Thresholds.SequenceMaxCandidatesPerUser;
+            if (loaded.Thresholds.SequenceTimeoutSeconds > 0) target.Thresholds.SequenceTimeoutSeconds = loaded.Thresholds.SequenceTimeoutSeconds;
             if (loaded.Thresholds.UserIpBaselineTopCount > 0) target.Thresholds.UserIpBaselineTopCount = loaded.Thresholds.UserIpBaselineTopCount;
         }
         if (loaded.PersonalDomains is { Count: > 0 }) target.PersonalDomains = loaded.PersonalDomains.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -374,7 +382,12 @@ COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event
 COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('GoogleDisplayTarget','GoogleTarget','GoogleSourceRelativeUrl','GoogleSiteUrl','GoogleDrive_DocumentId','GoogleGmail_AttachmentName','DisplayTarget','TargetPath','OriginalSourcePath','Original Path','FolderPath','SourceRelativeUrl','DestinationRelativeUrl','Folder_Path','Item_ParentFolder_Path','AffectedItems_0_ParentFolder_Path','SourceUrl','SourceUrlChain','Url','CloudAccount','OneDriveUserFolder','Dropbox_personal_path','GoogleDriveAccountFromPath') AND IFNULL(ef.field_value,'') NOT LIKE '%WorkingEvidence%' LIMIT 1), '') AS path_hint,
 COALESCE((SELECT group_concat(ef.field_value, '; ') FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name LIKE '%Attachment%'), '') AS attachments_expanded,
 e.data_source,
-COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('DriveType','Drive Type') LIMIT 1), '') AS drive_type
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name IN ('DriveType','Drive Type') LIMIT 1), '') AS drive_type,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name = 'GoogleRiskTransferPotential' LIMIT 1), '') AS google_risk_transfer,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name = 'GoogleRiskDestructionPotential' LIMIT 1), '') AS google_risk_destruction,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name = 'GoogleRiskAiPotential' LIMIT 1), '') AS google_risk_ai,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name = 'GoogleRiskAdminPotential' LIMIT 1), '') AS google_risk_admin,
+COALESCE((SELECT ef.field_value FROM event_fields ef WHERE ef.event_id = e.event_id AND ef.field_name = 'GoogleRiskReason' LIMIT 1), '') AS google_risk_reason
 FROM events e ORDER BY e.creation_date_utc, e.event_id;";
 
         using var reader = cmd.ExecuteReader();
@@ -416,7 +429,12 @@ FROM events e ORDER BY e.creation_date_utc, e.event_id;";
                 PathHint = reader.IsDBNull(30) ? "" : reader.GetString(30),
                 AttachmentsExpanded = reader.IsDBNull(31) ? "" : reader.GetString(31),
                 DataSource = reader.IsDBNull(32) ? "O365_UAL" : reader.GetString(32),
-                DriveType = reader.IsDBNull(33) ? "" : reader.GetString(33)
+                DriveType = reader.IsDBNull(33) ? "" : reader.GetString(33),
+                GoogleRiskTransferPotential = reader.IsDBNull(34) ? "" : reader.GetString(34),
+                GoogleRiskDestructionPotential = reader.IsDBNull(35) ? "" : reader.GetString(35),
+                GoogleRiskAiPotential = reader.IsDBNull(36) ? "" : reader.GetString(36),
+                GoogleRiskAdminPotential = reader.IsDBNull(37) ? "" : reader.GetString(37),
+                GoogleRiskReason = reader.IsDBNull(38) ? "" : reader.GetString(38)
             });
         }
         return list;
@@ -438,34 +456,172 @@ FROM events e ORDER BY e.creation_date_utc, e.event_id;";
         return events.Where(e => e.IsBehavioralTimestamp && wanted.Contains(e.Operation ?? string.Empty) && !string.IsNullOrWhiteSpace(e.CreationDateUtc)).GroupBy(e => (e.UserId ?? string.Empty, Bucket30(e.CreationDateUtc))).ToDictionary(g => g.Key, g => g.Count());
     }
 
-    private static List<RiskHit> DetectSequences(List<EventRecord> events, RiskEngineConfig config)
+    private sealed class SequenceCandidate
+    {
+        public EventRecord Event { get; init; } = new();
+        public DateTime TimestampUtc { get; init; }
+        public bool IsMailboxAccess { get; init; }
+        public bool IsDownload { get; init; }
+        public bool IsAccessOrMovement { get; init; }
+        public bool HasPersonalRecipient { get; init; }
+        public bool IsExternalShare { get; init; }
+        public bool IsDeletion { get; init; }
+        public bool IsCloudVisit { get; init; }
+    }
+
+    private static List<RiskHit> DetectSequences(List<EventRecord> events, RiskEngineConfig config, Action<string> log, Action<int, int, int>? progress, Stopwatch sw)
     {
         var hits = new List<RiskHit>();
-        foreach (var group in events.Where(e => e.IsBehavioralTimestamp && !string.IsNullOrWhiteSpace(e.CreationDateUtc)).GroupBy(e => e.UserId ?? string.Empty, StringComparer.OrdinalIgnoreCase))
-        {
-            var ordered = group.OrderBy(e => e.CreationDateUtc, StringComparer.OrdinalIgnoreCase).ThenBy(e => e.EventId).ToList();
-            for (int i = 0; i < ordered.Count; i++)
-            {
-                var currentTime = ParseLoose(ordered[i].CreationDateUtc);
-                if (currentTime is null) continue;
-                for (int j = i + 1; j < ordered.Count; j++)
-                {
-                    var next = ordered[j];
-                    var nextTime = ParseLoose(next.CreationDateUtc);
-                    if (nextTime is null) continue;
-                    if ((nextTime.Value - currentTime.Value).TotalMinutes > config.Thresholds.SequenceWindowMinutes) break;
+        var window = Math.Max(1, config.Thresholds.SequenceWindowMinutes);
+        var maxComparisons = Math.Max(10000, config.Thresholds.SequenceMaxComparisons);
+        var maxHits = Math.Max(1000, config.Thresholds.SequenceMaxHits);
+        var progressEvery = Math.Max(10000, config.Thresholds.SequenceProgressEveryComparisons);
+        var maxCandidatesPerUser = Math.Max(1000, config.Thresholds.SequenceMaxCandidatesPerUser);
+        var timeoutSeconds = Math.Max(30, config.Thresholds.SequenceTimeoutSeconds);
+        long comparisons = 0;
+        long skippedCandidates = 0;
+        var stoppedForComparisonLimit = false;
+        var stoppedForHitLimit = false;
+        var stoppedForTimeout = false;
+        var lastLog = DateTime.UtcNow;
+        var sequenceSw = Stopwatch.StartNew();
 
-                    AddIfRule(hits, config, "SEQ-001", next, ordered[i].Operation.Equals("MailItemsAccessed", StringComparison.OrdinalIgnoreCase) && ContainsPersonalDomain(config, FirstNonBlank(next.EmailTo, next.Recipients)), $"MailItemsAccessed followed by personal recipient within {config.Thresholds.SequenceWindowMinutes} minutes", FirstNonBlank(next.EmailTo, next.Recipients));
-                    AddIfRule(hits, config, "SEQ-002", next, ordered[i].Operation.Equals("FileDownloaded", StringComparison.OrdinalIgnoreCase) && IsExternalSharingOperation(next.Operation), $"FileDownloaded followed by external sharing/link activity within {config.Thresholds.SequenceWindowMinutes} minutes", next.Operation);
-                    AddIfRule(hits, config, "SEQ-003", next, ordered[i].Operation.Equals("FileDownloaded", StringComparison.OrdinalIgnoreCase) && IsDeletionLikeOperation(next.Operation), $"FileDownloaded followed by deletion-related activity within {config.Thresholds.SequenceWindowMinutes} minutes", next.Operation);
-                    
-                    bool isFileAccess = LooksLikeAccessOrMovementOperation(ordered[i].Operation) || ordered[i].Operation == "FileDownloaded";
-                    bool isCloudVisit = next.DataSource == "Browser_History" && ContainsKeyword(config.CloudStorageDomains, next.ObjectId);
-                    AddIfRule(hits, config, "SEQ-004", next, isFileAccess && isCloudVisit, $"File access/download followed by visit to cloud storage within {config.Thresholds.SequenceWindowMinutes} minutes", next.ObjectId);
+        var candidates = events
+            .Where(e => e.IsBehavioralTimestamp && !string.IsNullOrWhiteSpace(e.CreationDateUtc))
+            .Select(e => new { Event = e, Time = ParseLoose(e.CreationDateUtc) })
+            .Where(x => x.Time.HasValue)
+            .Select(x => new SequenceCandidate
+            {
+                Event = x.Event,
+                TimestampUtc = x.Time!.Value,
+                IsMailboxAccess = x.Event.Operation.Equals("MailItemsAccessed", StringComparison.OrdinalIgnoreCase),
+                IsDownload = x.Event.Operation.Equals("FileDownloaded", StringComparison.OrdinalIgnoreCase),
+                IsAccessOrMovement = LooksLikeAccessOrMovementOperation(x.Event.Operation) || x.Event.Operation.Equals("FileDownloaded", StringComparison.OrdinalIgnoreCase),
+                HasPersonalRecipient = ContainsPersonalDomain(config, FirstNonBlank(x.Event.EmailTo, x.Event.Recipients)),
+                IsExternalShare = IsExternalSharingOperation(x.Event.Operation),
+                IsDeletion = IsDeletionLikeOperation(x.Event.Operation),
+                IsCloudVisit = x.Event.DataSource == "Browser_History" && ContainsKeyword(config.CloudStorageDomains, x.Event.ObjectId)
+            })
+            .Where(x => IsSequenceStartCandidate(x) || IsSequenceEndCandidate(x))
+            .GroupBy(x => x.Event.UserId ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var candidateTotalBeforeCaps = candidates.Sum(g => g.Count());
+        log($"Risk sequence detection: reduced {events.Count:N0} events to {candidateTotalBeforeCaps:N0} sequence candidates; window={window:N0} minutes; max_comparisons={maxComparisons:N0}; max_hits={maxHits:N0}; max_candidates_per_user={maxCandidatesPerUser:N0}; timeout_seconds={timeoutSeconds:N0}.");
+        progress?.Invoke(0, candidateTotalBeforeCaps, hits.Count);
+
+        foreach (var group in candidates)
+        {
+            var ordered = group.OrderBy(e => e.TimestampUtc).ThenBy(e => e.Event.EventId).ToList();
+            if (ordered.Count > maxCandidatesPerUser)
+            {
+                skippedCandidates += ordered.Count - maxCandidatesPerUser;
+                ordered = ordered
+                    .OrderByDescending(e => SequencePriority(e))
+                    .ThenBy(e => e.TimestampUtc)
+                    .Take(maxCandidatesPerUser)
+                    .OrderBy(e => e.TimestampUtc)
+                    .ThenBy(e => e.Event.EventId)
+                    .ToList();
+                log($"WARN: Risk sequence candidate cap applied for user/group '{group.Key}': retained {ordered.Count:N0}, skipped {skippedCandidates:N0} total candidates so far.");
+            }
+
+            var starts = ordered.Where(IsSequenceStartCandidate).ToList();
+            var ends = ordered.Where(IsSequenceEndCandidate).ToList();
+            var endIndex = 0;
+
+            foreach (var current in starts)
+            {
+                while (endIndex < ends.Count && ends[endIndex].TimestampUtc <= current.TimestampUtc)
+                {
+                    endIndex++;
+                }
+
+                for (int j = endIndex; j < ends.Count; j++)
+                {
+                    var next = ends[j];
+                    var deltaMinutes = (next.TimestampUtc - current.TimestampUtc).TotalMinutes;
+                    if (deltaMinutes > window) break;
+                    if (next.Event.EventId == current.Event.EventId) continue;
+
+                    comparisons++;
+                    if (comparisons > maxComparisons)
+                    {
+                        stoppedForComparisonLimit = true;
+                        break;
+                    }
+
+                    AddIfRule(hits, config, "SEQ-001", next.Event, current.IsMailboxAccess && next.HasPersonalRecipient, $"MailItemsAccessed followed by personal recipient within {window} minutes", FirstNonBlank(next.Event.EmailTo, next.Event.Recipients));
+                    AddIfRule(hits, config, "SEQ-002", next.Event, current.IsDownload && next.IsExternalShare, $"FileDownloaded followed by external sharing/link activity within {window} minutes", next.Event.Operation);
+                    AddIfRule(hits, config, "SEQ-003", next.Event, current.IsDownload && next.IsDeletion, $"FileDownloaded followed by deletion-related activity within {window} minutes", next.Event.Operation);
+                    AddIfRule(hits, config, "SEQ-004", next.Event, current.IsAccessOrMovement && next.IsCloudVisit, $"File access/download followed by visit to cloud storage within {window} minutes", next.Event.ObjectId);
+
+                    if (hits.Count >= maxHits)
+                    {
+                        stoppedForHitLimit = true;
+                        break;
+                    }
+
+                    if (sequenceSw.Elapsed.TotalSeconds >= timeoutSeconds)
+                    {
+                        stoppedForTimeout = true;
+                        break;
+                    }
+
+                    if (comparisons % progressEvery == 0 || (DateTime.UtcNow - lastLog).TotalSeconds >= 15)
+                    {
+                        lastLog = DateTime.UtcNow;
+                        log($"Risk sequence progress: comparisons={comparisons:N0}; hits_so_far={hits.Count:N0}; skipped_candidates={skippedCandidates:N0}; sequence_elapsed={sequenceSw.Elapsed.TotalSeconds:N1}s; total_elapsed={sw.Elapsed.TotalSeconds:N1}s.");
+                        progress?.Invoke((int)Math.Min(candidateTotalBeforeCaps, Math.Min(comparisons, int.MaxValue)), candidateTotalBeforeCaps, hits.Count);
+                    }
+                }
+
+                if (stoppedForComparisonLimit || stoppedForHitLimit || stoppedForTimeout)
+                {
+                    break;
                 }
             }
+
+            if (stoppedForComparisonLimit || stoppedForHitLimit || stoppedForTimeout)
+            {
+                break;
+            }
         }
+
+        if (stoppedForComparisonLimit)
+        {
+            log($"WARN: Risk sequence detection stopped after reaching SequenceMaxComparisons={maxComparisons:N0}; remaining candidate pairs were skipped to prevent an unbounded full-investigation run.");
+        }
+        if (stoppedForHitLimit)
+        {
+            log($"WARN: Risk sequence detection stopped after reaching SequenceMaxHits={maxHits:N0}; remaining sequence hits were skipped to prevent excessive output volume.");
+        }
+        if (stoppedForTimeout)
+        {
+            log($"WARN: Risk sequence detection stopped after SequenceTimeoutSeconds={timeoutSeconds:N0}; remaining candidate pairs were skipped to preserve full-investigation responsiveness.");
+        }
+        if (skippedCandidates > 0)
+        {
+            log($"WARN: Risk sequence detection skipped {skippedCandidates:N0} candidates due to SequenceMaxCandidatesPerUser={maxCandidatesPerUser:N0}.");
+        }
+        log($"Risk sequence detection complete: comparisons={comparisons:N0}; hits={hits.Count:N0}; skipped_candidates={skippedCandidates:N0}; sequence_elapsed={sequenceSw.Elapsed.TotalSeconds:N1}s; total_elapsed={sw.Elapsed.TotalSeconds:N1}s.");
+        progress?.Invoke(candidateTotalBeforeCaps, candidateTotalBeforeCaps, hits.Count);
         return hits;
+    }
+
+    private static bool IsSequenceStartCandidate(SequenceCandidate candidate) => candidate.IsMailboxAccess || candidate.IsDownload || candidate.IsAccessOrMovement;
+    private static bool IsSequenceEndCandidate(SequenceCandidate candidate) => candidate.HasPersonalRecipient || candidate.IsExternalShare || candidate.IsDeletion || candidate.IsCloudVisit;
+    private static int SequencePriority(SequenceCandidate candidate)
+    {
+        var score = 0;
+        if (candidate.HasPersonalRecipient) score += 10;
+        if (candidate.IsExternalShare) score += 9;
+        if (candidate.IsDeletion) score += 8;
+        if (candidate.IsCloudVisit) score += 7;
+        if (candidate.IsMailboxAccess) score += 5;
+        if (candidate.IsDownload) score += 4;
+        if (candidate.IsAccessOrMovement) score += 1;
+        return score;
     }
 
     private static List<RiskHit> DeduplicateHits(List<RiskHit> hits) => hits.GroupBy(h => $"{h.EventId}\u001F{h.RuleCode}\u001F{h.SupportingValue}", StringComparer.Ordinal).Select(g => g.OrderByDescending(x => x.RiskScore).First()).OrderByDescending(h => h.RiskScore).ThenBy(h => h.EventId).ToList();
@@ -511,6 +667,7 @@ FROM events e ORDER BY e.creation_date_utc, e.event_id;";
     private static string RuleNameFromCode(string code) => code switch { "EXF-001" => "Personal email recipient", "EXF-002" => "Personal email with attachment", "EXF-010" => "Single file download", "EXF-011" => "Download burst", "EXF-012" => "Mass download burst", "EXF-013" => "ZIP package name present", "EXF-014" => "After-hours download burst", "EXF-020" => "Mailbox item access", "EXF-021" => "Bulk mailbox access", "EXF-022" => "Mailbox access from unusual IP", "EXF-030" => "External/anonymous sharing event", "EXF-040" => "Print activity", "EXF-052" => "Sensitive-name access", "EXF-060" => "LNK/JumpList/RecycleBin Removable Drive", "EXF-061" => "LNK/JumpList/RecycleBin Network Drive", "EXF-070" => "USB Device Connected", "EXF-071" => "SetupAPI USB device first install", "EXF-072" => "SetupAPI transfer-capable device/interface install", "CON-071" => "SetupAPI destructive tool/driver install", "EXF-080" => "Browser visit to cloud storage", "EXF-081" => "Browser download from cloud storage", "EXF-082" => "SRUM cloud network indicator", "EXF-083" => "Cloud sync artifact observed", "EXF-084" => "Office cloud MRU item", "EXF-085" => "Personal webmail visit", "EXF-086" => "Office OAlerts file activity", "EXF-090" => "Transfer or sync tool observed", "EXF-091" => "Google Takeout export activity", "EXF-092" => "Google Drive exfiltration-relevant activity", "EXF-093" => "Google Gmail transfer-relevant activity", "EXF-094" => "Google OAuth/API data access", "ACC-031" => "Google access anomaly", "CON-082" => "Google Vault/Admin control event", "AI-011" => "Google Gemini AI activity", "ACC-010" => "Cross-user personal site access", "ACC-020" => "Local file or localhost browser access", "CON-060" => "Hard delete", "CON-061" => "Deletion burst", "CON-062" => "Recycle Bin file deleted", "CON-063" => "USN file delete", "CON-070" => "Anti-forensic tool executed", "SEQ-001" => "Mailbox access followed by personal-email send", "SEQ-002" => "Download followed by sharing", "SEQ-003" => "Download followed by deletion", "SEQ-004" => "File access followed by cloud storage visit", _ => code };
     private static string ScoreToLevel(int score, RiskEngineConfig config) => score >= config.ScoreThresholds.CriticalMin ? "Critical" : score >= config.ScoreThresholds.HighMin ? "High" : score >= config.ScoreThresholds.MediumMin ? "Medium" : "Low";
     
+    private static bool IsYes(string value) => string.Equals((value ?? string.Empty).Trim(), "Yes", StringComparison.OrdinalIgnoreCase) || string.Equals((value ?? string.Empty).Trim(), "True", StringComparison.OrdinalIgnoreCase) || string.Equals((value ?? string.Empty).Trim(), "1", StringComparison.OrdinalIgnoreCase);
     private static bool ContainsPersonalDomain(RiskEngineConfig config, string text) => !string.IsNullOrWhiteSpace(text) && config.PersonalDomains.Any(d => text.Contains(d, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsSensitiveKeyword(RiskEngineConfig config, string text) => !string.IsNullOrWhiteSpace(text) && config.SensitiveKeywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
     private static bool ContainsKeyword(List<string> keywords, string text) => !string.IsNullOrWhiteSpace(text) && keywords != null && keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));

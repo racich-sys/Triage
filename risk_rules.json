@@ -17,6 +17,11 @@
     "deletionBurst30Min": 10,
     "afterHoursDownloadBurst30Min": 10,
     "sequenceWindowMinutes": 60,
+    "sequenceMaxComparisons": 250000,
+    "sequenceMaxHits": 50000,
+    "sequenceProgressEveryComparisons": 10000,
+    "sequenceMaxCandidatesPerUser": 2000,
+    "sequenceTimeoutSeconds": 60,
     "userIpBaselineTopCount": 3
   },
   "personalDomains": [

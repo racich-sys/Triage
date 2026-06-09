@@ -262,11 +262,19 @@ internal static class HeadlessTriageRunner
             var hashSources = HasFlag(options, "hash-google-sources");
             var skipRisk = HasFlag(options, "skip-risk");
             var includeMbox = HasFlag(options, "include-mbox");
+            var includeExpandedGoogleFiles = HasFlag(options, "include-expanded-google-files");
+            var includeDuplicateGoogleArchives = HasFlag(options, "include-duplicate-google-archives");
             Log(includeMbox
                 ? "Google source discovery: MBOX files are included for this run."
                 : "Google source discovery: MBOX files are excluded by default for fast Google parser validation. Re-run with --include-mbox when MBOX testing is intended.");
+            Log(includeExpandedGoogleFiles
+                ? "Google source discovery: expanded Takeout/Gemini child files are included even when ZIP archives are also present."
+                : "Google source discovery: expanded Takeout/Gemini child files are suppressed when source ZIP archives are also present. Re-run with --include-expanded-google-files for full duplicate-path coverage.");
+            Log(includeDuplicateGoogleArchives
+                ? "Google source discovery: duplicate/umbrella Takeout ZIP archives are included for this run."
+                : "Google source discovery: redundant umbrella Takeout ZIP archives are suppressed when part-specific Takeout ZIPs are present. Re-run with --include-duplicate-google-archives to ingest both deliberately.");
             WriteGoogleStatus("running", "discovering_sources");
-            var candidateFiles = FindGoogleSourceCandidates(googleRoot, includeMbox, Log).ToList();
+            var candidateFiles = FindGoogleSourceCandidates(googleRoot, includeMbox, includeExpandedGoogleFiles, includeDuplicateGoogleArchives, Log).ToList();
             WriteGoogleStatus("running", "sources_discovered", "candidate_sources=" + candidateFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             if (candidateFiles.Count == 0)
                 throw new InvalidOperationException("No candidate Google source files were found. Expected Google audit/takeout/Gemini ZIP/CSV/JSON/HTML files; MBOX files are excluded unless --include-mbox is supplied.");
@@ -358,7 +366,14 @@ internal static class HeadlessTriageRunner
                 try
                 {
                     WriteGoogleStatus("running", "validation_export_starting", "risk_status=" + riskStatus);
-                    var result = ValidationBundleService.ExportValidationBundle(validationZip, model, caseRoot, dbPath, Log);
+                    var result = ValidationBundleService.ExportValidationBundle(validationZip, model, caseRoot, dbPath, message =>
+                    {
+                        Log(message);
+                        if (message.StartsWith("Building ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            WriteGoogleStatus("running", "validation_export_running", "risk_status=" + riskStatus + Environment.NewLine + "validation_step=" + SanitizeLogLine(message));
+                        }
+                    });
                     validationBundleStatus = "exported";
                     WriteGoogleStatus("running", "validation_export_complete", "risk_status=" + riskStatus + Environment.NewLine + "validation_bundle_bytes=" + result.ZipBytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
                     Log($"Validation bundle exported: {result.ZipPath} ({result.ZipBytes:N0} bytes). ");
@@ -383,6 +398,7 @@ internal static class HeadlessTriageRunner
                 "google_root=" + googleRoot + Environment.NewLine +
                 "source_count=" + model.Sources.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
                 "mbox_included=" + includeMbox.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
+                "expanded_google_files_included=" + includeExpandedGoogleFiles.ToString(System.Globalization.CultureInfo.InvariantCulture) + Environment.NewLine +
                 "risk_status=" + riskStatus + Environment.NewLine +
                 "validation_bundle_status=" + validationBundleStatus + Environment.NewLine +
                 "validation_bundle_error=" + validationBundleError + Environment.NewLine +
@@ -465,7 +481,7 @@ internal static class HeadlessTriageRunner
     }
 
 
-    private static IEnumerable<string> FindGoogleSourceCandidates(string root, bool includeMbox, Action<string> log)
+    private static IEnumerable<string> FindGoogleSourceCandidates(string root, bool includeMbox, bool includeExpandedGoogleFiles, bool includeDuplicateGoogleArchives, Action<string> log)
     {
         if (File.Exists(root))
         {
@@ -484,13 +500,152 @@ internal static class HeadlessTriageRunner
             yield break;
         }
 
+        var candidates = new List<string>();
         foreach (var file in files)
         {
             bool include;
             try { include = IsGoogleSourceCandidate(file, includeMbox, log); }
             catch { include = false; }
-            if (include) yield return Path.GetFullPath(file);
+            if (include) candidates.Add(Path.GetFullPath(file));
         }
+
+        var distinctCandidates = candidates.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+        var hasArchives = distinctCandidates.Any(p => Path.GetExtension(p).Equals(".zip", StringComparison.OrdinalIgnoreCase));
+        var hasPartTakeoutArchives = distinctCandidates.Any(IsPartSpecificTakeoutArchive);
+        var preferredArchiveBySignature = BuildPreferredGoogleArchiveMap(distinctCandidates, root);
+        var excludedExpanded = 0;
+        var excludedDuplicateArchives = 0;
+        var excludedDuplicatePartArchives = 0;
+        foreach (var file in distinctCandidates)
+        {
+            if (!includeExpandedGoogleFiles && hasArchives && !Path.GetExtension(file).Equals(".zip", StringComparison.OrdinalIgnoreCase) && IsExpandedGoogleChildFile(file, root))
+            {
+                excludedExpanded++;
+                continue;
+            }
+
+            if (!includeDuplicateGoogleArchives && hasPartTakeoutArchives && IsRedundantUmbrellaTakeoutArchive(file))
+            {
+                excludedDuplicateArchives++;
+                continue;
+            }
+
+            if (!includeDuplicateGoogleArchives && ShouldSuppressDuplicateGoogleArchive(file, preferredArchiveBySignature))
+            {
+                excludedDuplicatePartArchives++;
+                continue;
+            }
+
+            yield return file;
+        }
+
+        if (excludedExpanded > 0)
+        {
+            log($"Google source discovery: excluded {excludedExpanded:N0} expanded Takeout/Gemini child files because ZIP archives were also present. This avoids duplicate thin-test ingestion; use --include-expanded-google-files to ingest both archive and expanded paths deliberately.");
+        }
+        if (excludedDuplicateArchives > 0)
+        {
+            log($"Google source discovery: excluded {excludedDuplicateArchives:N0} redundant umbrella Takeout ZIP archive(s) because part-specific Takeout archives were present. This avoids duplicate thin-test ingestion; use --include-duplicate-google-archives to ingest both deliberately.");
+        }
+        if (excludedDuplicatePartArchives > 0)
+        {
+            log($"Google source discovery: excluded {excludedDuplicatePartArchives:N0} duplicate Google archive path(s) with the same file name and byte size. Root-level copies are preferred over nested extracted copies; use --include-duplicate-google-archives to ingest both deliberately.");
+        }
+    }
+
+    private static bool IsPartSpecificTakeoutArchive(string path)
+    {
+        if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase)) return false;
+        var name = Path.GetFileName(path).ToLowerInvariant();
+        return name.StartsWith("part", StringComparison.OrdinalIgnoreCase) && name.Contains("takeout");
+    }
+
+    private static bool IsRedundantUmbrellaTakeoutArchive(string path)
+    {
+        if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase)) return false;
+        var name = Path.GetFileName(path).ToLowerInvariant();
+        return string.Equals(name, "takeout.zip", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Dictionary<string, string> BuildPreferredGoogleArchiveMap(IEnumerable<string> candidates, string root)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in candidates)
+        {
+            if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IsPartSpecificTakeoutArchive(path) && !Path.GetFileName(path).Contains("Gemini", StringComparison.OrdinalIgnoreCase)) continue;
+
+            long length;
+            try { length = new FileInfo(path).Length; }
+            catch { continue; }
+
+            var signature = BuildGoogleArchiveSignature(path, length);
+            if (!map.TryGetValue(signature, out var current) || IsPreferredGoogleArchivePath(path, current, root))
+                map[signature] = path;
+        }
+        return map;
+    }
+
+    private static bool ShouldSuppressDuplicateGoogleArchive(string path, IReadOnlyDictionary<string, string> preferredArchiveBySignature)
+    {
+        if (!Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase)) return false;
+
+        long length;
+        try { length = new FileInfo(path).Length; }
+        catch { return false; }
+
+        var signature = BuildGoogleArchiveSignature(path, length);
+        return preferredArchiveBySignature.TryGetValue(signature, out var preferred)
+            && !string.Equals(Path.GetFullPath(path), Path.GetFullPath(preferred), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildGoogleArchiveSignature(string path, long length)
+    {
+        return Path.GetFileName(path).ToLowerInvariant() + "|" + length.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsPreferredGoogleArchivePath(string candidate, string current, string root)
+    {
+        var candidateScore = GetGoogleArchivePathPreferenceScore(candidate, root);
+        var currentScore = GetGoogleArchivePathPreferenceScore(current, root);
+        if (candidateScore != currentScore) return candidateScore > currentScore;
+        return string.Compare(candidate, current, StringComparison.OrdinalIgnoreCase) < 0;
+    }
+
+    private static int GetGoogleArchivePathPreferenceScore(string path, string root)
+    {
+        var score = 0;
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? string.Empty;
+        if (string.Equals(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), fullRoot, StringComparison.OrdinalIgnoreCase))
+            score += 100;
+
+        var normalized = path.Replace('\\', '/').ToLowerInvariant();
+        if (normalized.Contains("/google takeout/")) score -= 20;
+        if (normalized.Contains("/takeout/")) score -= 10;
+        if (normalized.Contains("/gemini ai session")) score -= 10;
+        return score;
+    }
+
+    private static bool IsExpandedGoogleChildFile(string path, string root)
+    {
+        var normalized = path.Replace('\\', '/').ToLowerInvariant();
+        if (normalized.Contains("/takeout/")) return true;
+        if (normalized.Contains("/gemini ai session")) return true;
+
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var current = new FileInfo(path).Directory;
+        while (current != null)
+        {
+            var currentFull = current.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.Equals(currentFull, rootFull, StringComparison.OrdinalIgnoreCase)) break;
+            var name = current.Name.ToLowerInvariant();
+            if ((name.StartsWith("part", StringComparison.OrdinalIgnoreCase) && name.Contains("takeout")) || name.Contains("takeout-") || name.Contains("google takeout") || name.Contains("gemini ai session"))
+                return true;
+            current = current.Parent;
+        }
+
+        return false;
     }
 
     private static bool IsGoogleSourceCandidate(string path, bool includeMbox, Action<string>? log = null)

@@ -11,6 +11,7 @@ public static class ParserRegistry
     {
         new GoogleWorkspaceAuditParser(),
         new GoogleTakeoutParser(),
+        new MboxParser(),
         new GeminiSessionParser(),
         new O365UalParser(),
         new RecycleBinParser(),

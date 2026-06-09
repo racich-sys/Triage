@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "3.7.0"
+$Version = "3.21.0"
 # BuildValidationUsesUtf8AddContent marker: build validation logs are appended with Add-Content -Encoding UTF8 instead of Tee-Object.
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -90,9 +90,13 @@ Run-Step "dotnet --info" { dotnet --info }
 Run-Step "dotnet restore" { dotnet restore }
 Run-Step "dotnet build -c $Configuration" { dotnet build -c $Configuration --no-restore }
 
-$BuildExe = Join-Path $ProjectRoot "bin\$Configuration\net8.0-windows\VestigantTriage.exe"
-if (-not (Test-Path $BuildExe)) {
-    throw "Build completed but executable was not found: $BuildExe"
+$BuildExeCandidates = @(
+    (Join-Path $ProjectRoot "bin\$Configuration\net8.0-windows\VestigantTriage.exe"),
+    (Join-Path $ProjectRoot "bin\$Configuration\net8.0-windows\win-x64\VestigantTriage.exe")
+)
+$BuildExe = $BuildExeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $BuildExe) {
+    throw "Build completed but executable was not found in expected framework-dependent locations: $($BuildExeCandidates -join '; ')"
 }
 Write-Log "PASS: Build executable exists: $BuildExe"
 
@@ -109,6 +113,13 @@ if ($Publish) {
     }
     Write-Log "PASS: Published executable exists: $PublishExe"
 
+    $PublishDir = Split-Path -Parent $PublishExe
+    $NativeSqliteProvider = @(Get-ChildItem -LiteralPath $PublishDir -Recurse -File -Filter "e_sqlite3.dll" -ErrorAction SilentlyContinue)
+    if ($NativeSqliteProvider.Count -lt 1) {
+        throw "Published output is missing native SQLite provider e_sqlite3.dll. Microsoft.Data.Sqlite will fail at runtime with DllNotFoundException."
+    }
+    Write-Log "PASS: SQLite native provider exists in publish output: $($NativeSqliteProvider[0].FullName)"
+
     try {
         $item = Get-Item $PublishExe
         Write-Log "Published FileVersion: $($item.VersionInfo.FileVersion)"
@@ -122,6 +133,8 @@ Write-Log ""
 Write-Log "=== Static source assertions ==="
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\AppInfo.cs") -Pattern "Version\s*\=\s*`"$VersionRegex`"" -Description "AppInfo version is $Version"
 Assert-FileContains -Path (Join-Path $ProjectRoot "VestigantTriage.csproj") -Pattern "<Version>$VersionRegex</Version>" -Description "csproj package version is $Version"
+Assert-FileContains -Path (Join-Path $ProjectRoot "VestigantTriage.csproj") -Pattern "SQLitePCLRaw\.bundle_e_sqlite3" -Description "csproj explicitly references SQLite native provider bundle"
+Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Build-And-Validate-VestigantTriage.ps1") -Pattern "e_sqlite3\.dll" -Description "Build validation checks published SQLite native provider DLL"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ParserCoverageService.cs") -Pattern 'Office Owner File' -Description "Parser Coverage contains Office Owner File family"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Triage\ImageTriageCore.cs") -Pattern 'Starting MFT owner/lock file scan' -Description "MFT owner/lock scan marker exists"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Triage\ImageTriageCore.cs") -Pattern 'Owner/lock files are collected from the MFT filename index' -Description "Owner files are MFT-index driven"
@@ -161,6 +174,8 @@ Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'tx\.Commit\(\)' -Description "DatabaseIngest import loop tail remains intact after Google schema-separation patch"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'ShouldSkipGoogleMetadataField' -Description "Google ingest skips duplicate/default metadata fields that bloat indexed event_fields"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'google_event_raw_fields' -Description "Google raw source fields are stored outside indexed event_fields"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'ShouldSkipGoogleRawStorageField' -Description "Google raw storage skips raw fields already promoted into event/canonical metadata"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'NormalizeRawFieldName' -Description "Google raw storage uses normalized raw field names for compaction decisions"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseCore.cs") -Pattern 'DROP INDEX IF EXISTS ix_event_fields_value' -Description "Broad event_fields value index is removed for large cloud-ingest cases"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_metadata_storage_summary\.csv' -Description "Validation bundle exports Google metadata storage metrics"
 Assert-FileNotContains -Path (Join-Path $ProjectRoot "Parsers\RecycleBinParser.cs") -Pattern 'name\.Contains\("\$I"' -Description 'Recycle Bin parser no longer uses broad $I substring matching'
@@ -213,10 +228,25 @@ Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_SOURCE_TRIAGE.ps1"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'WriteGoogleStatus' -Description "Google headless runner updates status file by phase"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'risk_processed' -Description "Google headless status records risk progress counters"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'Risk progress: evaluated' -Description "Risk engine logs long-running progress"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'Risk sequence progress' -Description "Risk engine logs bounded sequence-detection progress"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'SequenceMaxComparisons' -Description "Risk sequence detection has a comparison cap"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern 'sequenceMaxComparisons' -Description "Risk profile exposes sequence comparison cap"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern 'sequenceMaxCandidatesPerUser' -Description "Risk profile exposes sequence candidate cap"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern 'sequenceTimeoutSeconds' -Description "Risk profile exposes sequence timeout safeguard"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern '"sequenceMaxComparisons": 250000' -Description "Risk duplicate validation caps sequence comparisons for full-investigation safeguards"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern '"sequenceTimeoutSeconds": 60' -Description "Risk duplicate validation caps sequence detection runtime"
+Assert-FileContains -Path (Join-Path $ProjectRoot "risk_rules.json") -Pattern '"sequenceMaxCandidatesPerUser": 2000' -Description "Risk duplicate validation caps per-user sequence candidates"
+
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'SequenceMaxCandidatesPerUser' -Description "Risk sequence detection has a per-user candidate cap"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'SequenceTimeoutSeconds' -Description "Risk sequence detection has a timeout safeguard"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ExportSafeguards.cs") -Pattern 'ExpensiveJoinedDump' -Description "Export safeguards classify expensive joined CSV dumps"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_export_safeguards_summary.csv' -Description "Validation bundle exports full-investigation safeguard summary"
+Assert-FileContains -Path (Join-Path $ProjectRoot "PROJECT_ROADMAP_AND_CONTINUATION.md") -Pattern 'bounded exports' -Description "Roadmap records full-investigation bounded export safeguard"
+Assert-FileContains -Path (Join-Path $ProjectRoot "PROJECT_ROADMAP_AND_CONTINUATION.md") -Pattern 'export cost classes' -Description "Roadmap records export cost-class safeguard"
 Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_SOURCE_TRIAGE.ps1") -Pattern 'HeartbeatStatus' -Description "Google wrapper emits heartbeat status snapshots while process runs"
-Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_7_0.ps1") -Pattern 'SkipRisk' -Description "Google thin test wrapper skips risk by default unless explicitly included"
-Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_7_0.ps1") -Pattern '@runnerParams' -Description "Google thin test wrapper uses splatted named parameters"
-Assert-FileNotContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_7_0.ps1") -Pattern '\$runnerArgs' -Description "Google thin test wrapper does not use fragile positional runner argument arrays"
+Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1") -Pattern 'SkipRisk' -Description "Google thin test wrapper skips risk by default unless explicitly included"
+Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1") -Pattern '@runnerParams' -Description "Google thin test wrapper uses splatted named parameters"
+Assert-FileNotContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1") -Pattern '\$runnerArgs' -Description "Google thin test wrapper does not use fragile positional runner argument arrays"
 Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Create-TriageUploadBundle.ps1") -Pattern ('\$Version = "{0}"' -f [regex]::Escape($VersionToken)) -Description "Upload bundle script default version matches current package before ZIP packaging"
 
 
@@ -225,12 +255,56 @@ Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.c
 Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'BuildCalendarIcsEvents' -Description "Google Takeout parser promotes Calendar ICS VEVENT entries"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'BuildMeetConferenceCsvEvent' -Description "Google Takeout parser promotes Meet conference history CSV rows"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'GoogleTakeout_NestedArchiveObserved' -Description "Google Takeout parser inventories nested Takeout ZIPs"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\MboxParser.cs") -Pattern 'GoogleTakeout_EmailMessageObserved' -Description "MBOX parser emits Gmail Takeout message-header observations"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\ParserRegistry.cs") -Pattern 'new MboxParser\(\)' -Description "Parser registry includes MBOX parser"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'ExtractToFile\(tempFile' -Description "Nested Takeout ZIPs are extracted to temp files instead of large memory buffers"
+Assert-FileNotContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'new MemoryStream' -Description "Google Takeout parser avoids MemoryStream expansion for nested ZIPs"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'GoogleRiskTransferPotential' -Description "Risk engine loads parser-populated Google risk metadata"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Risk\RiskEngine.cs") -Pattern 'GoogleDrive_FileExported' -Description "Risk burst detection includes Google Drive export/download operations"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GeminiSessionParser.cs") -Pattern 'GoogleGeminiExtractedTextPreview' -Description "Gemini session parser extracts text previews from transcript/code artifacts"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\GoogleSourceSupport.cs") -Pattern 'Meet Conference History' -Description "Google Takeout family classifier recognizes Meet conference history"
 Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern '\.ics' -Description "Headless Google source discovery includes Calendar ICS files"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'include-expanded-google-files' -Description "Headless Google discovery can deliberately include expanded Google child files"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'IsExpandedGoogleChildFile' -Description "Headless Google discovery suppresses expanded child files when archives are also present"
+Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1") -Pattern 'IncludeExpandedGoogleFiles' -Description "Google thin wrapper exposes expanded child-file opt-in"
+Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_THIN_TEST_V3_21_0.ps1") -Pattern 'IncludeDuplicateGoogleArchives' -Description "Google thin wrapper exposes duplicate archive opt-in"
+Assert-FileContains -Path (Join-Path $ProjectRoot "RUN_GOOGLE_SOURCE_TRIAGE.ps1") -Pattern 'include-duplicate-google-archives' -Description "Google source automation forwards duplicate archive opt-in"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'IsRedundantUmbrellaTakeoutArchive' -Description "Headless Google discovery suppresses redundant umbrella Takeout ZIPs by default"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'BuildPreferredGoogleArchiveMap' -Description "Headless Google discovery suppresses duplicate same-name/same-size Google archives by default"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\HeadlessTriageRunner.cs") -Pattern 'ShouldSuppressDuplicateGoogleArchive' -Description "Headless Google discovery prefers one archive path per duplicate archive signature"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_product_coverage\.csv' -Description "Validation bundle includes Google product coverage report"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'ExportGoogleProductCoverage' -Description "Validation bundle exports Google product coverage metrics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_product_activity_summary\.csv' -Description "Validation bundle includes Google product activity summary"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_device_summary\.csv' -Description "Validation bundle includes Google device summary"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_ip_summary\.csv' -Description "Validation bundle includes Google IP summary"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_indexed_field_summary\.csv' -Description "Validation bundle includes Google indexed field frequency diagnostics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'ExportGoogleIndexedFieldSummary' -Description "Validation bundle exports Google indexed field compaction candidates"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_raw_field_classification\.csv' -Description "Validation bundle includes Google raw field classification diagnostics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'ExportGoogleRawFieldClassification' -Description "Validation bundle exports Google raw field classification report"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'ShouldSkipLowInformationGoogleRawField' -Description "Google ingest compacts low-information high-volume raw metadata"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'google_storage_health' -Description "Validation bundle exports Google metadata storage-health flags"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_google_v4_readiness_summary\.csv' -Description "Validation bundle includes Google v4 readiness summary"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'ExportGoogleV4ReadinessSummary' -Description "Validation bundle exports Google v4 readiness gate metrics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'canonical is "date" or "timestamp" or "time" or "created" or "modified"' -Description "Google raw storage skips redundant date/time source columns"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'canonical is "event" or "eventname" or "name" or "operation" or "activity"' -Description "Google raw storage skips redundant raw operation/source event columns"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'vestigant_sqlite_object_size_summary\.csv' -Description "Validation bundle includes SQLite object-size diagnostics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'ShouldSkipLowCardinalityGoogleIndexedField' -Description "Google ingest compacts repeated low-cardinality indexed metadata"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\DatabaseIngest.cs") -Pattern 'GoogleIPClassification' -Description "Google indexed compaction covers repeated IP classification metadata"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'sqlite_file_bytes_from_page_count' -Description "SQLite diagnostics export page-count byte estimates when dbstat is unavailable"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'indexed_field_review_threshold_per_event' -Description "Google metadata storage summary documents indexed-field thresholds"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'dbstat_unavailable' -Description "SQLite diagnostics export falls back when dbstat is unavailable"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Core\ValidationBundleService.cs") -Pattern 'ExportSqliteObjectSizeSummary' -Description "Validation bundle exports SQLite count and object-size metrics"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'GoogleTakeout_AutofillObserved' -Description "Google Takeout parser promotes Autofill values"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'GoogleDeviceType' -Description "Google Takeout parser promotes device attribution fields"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'GoogleIPClassification' -Description "Google Takeout parser promotes IP attribution fields"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GeminiSessionParser.cs") -Pattern 'GoogleGemini_PromptObserved' -Description "Gemini parser emits prompt/session/output operation names"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'BuildHtmlEvents\(string container, string sourceEntry, string\? html\)' -Description "Google Takeout HTML event builder accepts nullable HTML safely"
+Assert-FileContains -Path (Join-Path $ProjectRoot "Parsers\GoogleTakeoutParser.cs") -Pattern 'html \?\?= string\.Empty' -Description "Google Takeout parser normalizes nullable HTML before event building"
 
 Assert-FileContains -Path (Join-Path $ProjectRoot "CHANGELOG.md") -Pattern "(?m)^##\s+v$VersionRegex\b" -Description "Consolidated CHANGELOG contains current version heading"
 Assert-FileContains -Path (Join-Path $ProjectRoot "ai_context.md") -Pattern "Project Overview" -Description "Root ai_context.md exists and contains project overview"
+Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Get-GoogleCaseSqliteMetrics.ps1") -Pattern "google_event_raw_fields_exists" -Description "Google SQLite metrics script checks raw-field storage table"
+Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Get-GoogleCaseSqliteMetrics.ps1") -Pattern "ix_event_fields_value_exists" -Description "Google SQLite metrics script checks broad event field value index"
 Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Create-TriageUploadBundle.ps1") -Pattern "ai_context\.md" -Description "Upload bundle includes ai_context.md in project documentation"
 Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Create-TriageUploadBundle.ps1") -Pattern "RUN_GOOGLE_SOURCE_TRIAGE\.ps1" -Description "Upload bundle includes Google source automation script in project documentation"
 Assert-FileContains -Path (Join-Path $ProjectRoot "tools\Build-And-Validate-VestigantTriage.ps1") -Pattern '\$separateVersionNotes = @\(' -Description "Strict-mode array wrapping prevents singleton Get-ChildItem Count failures"
@@ -332,17 +406,19 @@ if ($SkipUploadBundleFixtureTest) {
     try {
         $outerZip = [System.IO.Compression.ZipFile]::OpenRead($FixtureOut)
         try {
-            $IncludedValidationBundle = $outerZip.Entries | Where-Object { $_.Name -eq "VestigantCase_validation_bundle.zip" -and $_.FullName -match '^validation_bundle[\/]' } | Select-Object -First 1
+            $IncludedValidationBundle = $outerZip.Entries |
+                Where-Object { $_.FullName -match '^validation_bundle[\\/].+\.zip$' -and $_.Length -gt 0 } |
+                Select-Object -First 1
         } finally { $outerZip.Dispose() }
     } catch { throw "Unable to inspect fixture upload ZIP '$FixtureOut': $($_.Exception.Message)" }
-    if (-not $IncludedValidationBundle) { throw "Upload bundle did not include a validation_bundle/VestigantCase_validation_bundle.zip entry." }
+    if (-not $IncludedValidationBundle) { throw "Upload bundle did not include a non-empty validation_bundle/*.zip entry." }
     Write-Log "PASS: Upload bundle includes validation bundle ZIP entry: $($IncludedValidationBundle.FullName)"
-    
+
     $InnerExtract = Join-Path $FixtureExtract "InnerValidationBundle"
     New-Item -ItemType Directory -Force -Path $FixtureExtract | Out-Null
     [System.IO.Compression.ZipFile]::ExtractToDirectory($FixtureOut, $FixtureExtract)
-    $ExtractedInnerZip = Get-ChildItem -LiteralPath $FixtureExtract -Recurse -File -Filter "VestigantCase_validation_bundle.zip" | Select-Object -First 1
-    if (-not $ExtractedInnerZip) { throw "Extracted upload bundle does not contain VestigantCase_validation_bundle.zip." }
+    $ExtractedInnerZip = Get-ChildItem -LiteralPath (Join-Path $FixtureExtract "validation_bundle") -Recurse -File -Filter "*.zip" | Select-Object -First 1
+    if (-not $ExtractedInnerZip) { throw "Extracted upload bundle does not contain a validation_bundle/*.zip file." }
     New-Item -ItemType Directory -Force -Path $InnerExtract | Out-Null
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ExtractedInnerZip.FullName, $InnerExtract)
     foreach ($entryName in $requiredValidationEntries) {

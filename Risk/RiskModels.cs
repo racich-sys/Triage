@@ -51,6 +51,11 @@ internal sealed class EventRecord
     public string AttachmentsExpanded { get; set; } = "";
     public string DataSource { get; set; } = "";
     public string DriveType { get; set; } = "";
+    public string GoogleRiskTransferPotential { get; set; } = "";
+    public string GoogleRiskDestructionPotential { get; set; } = "";
+    public string GoogleRiskAiPotential { get; set; } = "";
+    public string GoogleRiskAdminPotential { get; set; } = "";
+    public string GoogleRiskReason { get; set; } = "";
 }
 
 internal sealed class IngestResult
@@ -104,6 +109,11 @@ internal sealed class RiskThresholds
     public int DeletionBurst30Min { get; set; } = 10;
     public int AfterHoursDownloadBurst30Min { get; set; } = 10;
     public int SequenceWindowMinutes { get; set; } = 60;
+    public int SequenceMaxComparisons { get; set; } = 250000;
+    public int SequenceMaxHits { get; set; } = 50000;
+    public int SequenceProgressEveryComparisons { get; set; } = 10000;
+    public int SequenceMaxCandidatesPerUser { get; set; } = 2000;
+    public int SequenceTimeoutSeconds { get; set; } = 60;
     public int UserIpBaselineTopCount { get; set; } = 3;
 }
 

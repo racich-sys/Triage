@@ -1,5 +1,16 @@
 # ai_context.md
 
+
+## v3.21.0 - Risk/duplicate validation safeguards
+
+Evidence basis: the v3.20.0 default Google thin bundle completed successfully with version 3.20.0, status complete, 7 sources, risk skipped, validation bundle exported, `google_storage_health=OK`, and `google_raw_storage_health=OK`. v3.21.0 therefore advances the roadmap toward the remaining risk-enabled and duplicate/expanded archive validation runs.
+
+Changes in this package:
+- Tightened default risk sequence safeguards for full-investigation protection: `sequenceMaxComparisons=250000`, `sequenceMaxHits=50000`, `sequenceProgressEveryComparisons=10000`, `sequenceMaxCandidatesPerUser=2000`, and `sequenceTimeoutSeconds=60`.
+- Keeps bounded exports, export cost classes, timeout/cancel behavior, and avoiding expensive joined CSV dumps by default as roadmap-blocking full-investigation safeguards.
+- Keeps validation-bundle reporting for `vestigant_export_safeguards_summary.csv` and `vestigant_google_v4_readiness_summary.csv`.
+
+
 ## Project Overview
 
 Vestigant Triage is a Windows forensic triage application for ingesting endpoint, raw-image, cloud, audit, application, and account-export artifacts into a unified case database for timeline review, metadata export, validation, and risk assessment. The project prioritizes forensic soundness, reproducible workflows, explicit provenance, and fast triage paths that can be expanded into fuller processing.
@@ -29,7 +40,7 @@ Vestigant Triage is a Windows forensic triage application for ingesting endpoint
 
 ## Current State
 
-- Latest generated version: `v3.7.0`.
+- Latest generated version: `v3.21.0`.
 - `v3.4.4` completed a fast Google test successfully: status complete, 7 sources, MBOX excluded, risk completed, and validation bundle exported.
 - `v3.6.0` was a Google cloud-schema separation pass, but the Windows build failed because `Core/DatabaseIngest.cs` was accidentally truncated after a progress-logging `if` statement.
 - `v3.6.1` was a narrow build hotfix that restored the missing DatabaseIngest tail while preserving the v3.6.0 Google schema-separation logic.
@@ -38,8 +49,11 @@ Vestigant Triage is a Windows forensic triage application for ingesting endpoint
 - During the first v3.6.2 Google thin run, ingest appeared complete but the process was inactive or not visibly progressing for more than 40 minutes after risk analysis started. The status file still only reported `status=started`, which exposed a logging/observability gap.
 - The first v3.6.3 thin wrapper run failed before ingest because the wrapper passed literal parameter names into `RUN_GOOGLE_SOURCE_TRIAGE.ps1`, causing `GoogleRoot does not exist: -GoogleRoot`; v3.6.3.1 fixes the wrapper invocation.
 - `v3.6.3.1` is a narrow wrapper hotfix on top of v3.6.3 logging/risk-progress changes. It fixes Google thin-test wrapper argument binding by using hashtable splatting and still skips risk by default unless `-IncludeRisk` is supplied.
-- `v3.7.0` is a narrow release-script hotfix that fixes the stale upload-bundle default version token, keeps the Google thin-test wrapper fix, and adds package/release assertions for wrapper parameter passing and version-token drift.
-- `v3.7.0` still needs Windows build validation and a new Google thin run against `E:\0445_0001`.
+- `v3.6.3.2` is a narrow release-script hotfix that fixes the stale upload-bundle default version token, keeps the Google thin-test wrapper fix, and adds package/release assertions for wrapper parameter passing and version-token drift.
+- `v3.9.1` fixed the v3.9.0 Google thin runtime failure where the published output was missing the native SQLite provider `e_sqlite3.dll`, producing `Microsoft.Data.Sqlite.SqliteConnection` / `SQLitePCLRaw` `DllNotFoundException`.
+- `v3.9.2` fixed the follow-on build-validation path assumption by accepting RID-specific build output under `net8.0-windows\win-x64`.
+- `v3.10.0` follows the successful v3.9.2 thin upload. It suppresses redundant umbrella `Takeout.zip` archives by default when part-specific Takeout ZIP archives are present, adds `-IncludeDuplicateGoogleArchives` / `--include-duplicate-google-archives` opt-in, and hardens `vestigant_sqlite_object_size_summary.csv` so count/page metrics still export when SQLite `dbstat` is unavailable.
+- `v3.21.0` follows review of the successful v3.13.0 thin upload. It compacts repeated low-cardinality Google indexed metadata where the same meaning is already represented by event columns, source/provenance fields, or validation summaries, preserves meaningful searchable fields, and improves SQLite diagnostics when `dbstat` is unavailable.
 - The app uses a single consolidated `CHANGELOG.md` rather than separate root-level per-version markdown files.
 - Full source packages must include this root-level `ai_context.md` file.
 - Existing major functions include local endpoint triage, raw-image headless triage, validation-bundle generation, upload-bundle generation, Master tab all-record metadata export, print artifact expansion, SetupAPI transfer/destruction triage, and Google source ingestion framework.
@@ -48,7 +62,10 @@ Vestigant Triage is a Windows forensic triage application for ingesting endpoint
 
 ## Next Steps / Active Goal
 
-First validate that `v3.7.0` builds on the Windows workstation, then run the Google thin test against `E:\0445_0001` using `RUN_GOOGLE_THIN_TEST_V3_7_0.ps1`. Confirm that Workspace Audit, Takeout, and Gemini rows ingest correctly; for the default thin test, risk is skipped unless `-IncludeRisk` is supplied. Specific v3.7.0 validation targets: Takeout My Activity HTML rows should promote behavioral events where timestamps parse; Google Chat `messages.json` should produce message-level events; Google Meet `conference_history_records.csv` should produce participation events; Calendar `.ics` files should produce VEVENT rows; Gemini transcript/code text artifacts should expose extracted text previews; raw Google source columns should remain in `google_event_raw_fields`; `event_fields / events` should remain materially lower than the v3.6.1 observed ratio of about 58.2; and Google collision/storage validation CSVs should still be generated.
+Standing workflow: after the user uploads a thin result, review the thin result and proceed directly to the next build/version with scoped fixes and PowerShell test commands unless the user explicitly says to pause.
+
+
+First validate that `v3.21.0` builds on the Windows workstation, then run the Google thin test against `E:\0445_0001` using `RUN_GOOGLE_THIN_TEST_V3_21_0.ps1`. Confirm that Workspace Audit, Takeout, and Gemini rows ingest correctly; for the default thin test, risk is skipped unless `-IncludeRisk` is supplied. Specific v3.21.0 validation targets: `vestigant_google_indexed_field_summary.csv` should be present; `vestigant_google_metadata_storage_summary.csv` should include threshold rows plus `google_storage_health` and `google_raw_storage_health`; `vestigant_sqlite_object_size_summary.csv` should include page-count byte estimates if `dbstat` is unavailable; validation-export times for schema/collision/unmapped summaries should remain visible; `event_fields / events` and `google_event_raw_fields / events` should be compared against v3.13.0 values of about 28.97 and 13.15 respectively; and Google collision/storage validation CSVs should still be generated.
 
 ## A full list of what has been implemented, how and what version the implementation took place in (i.e. Roadmap)
 
@@ -75,7 +92,7 @@ First validate that `v3.7.0` builds on the Windows workstation, then run the Goo
   - Wrote UTF-8 logs without `Tee-Object` UTF-16/NUL output.
   - Improved Office owner-file username extraction.
 
-- `v3.3.8.1`
+- `v3.3.10.0`
   - Normalized status files before testing for `status=complete`.
 
 - `v3.3.8.2`
@@ -214,6 +231,30 @@ First validate that `v3.7.0` builds on the Windows workstation, then run the Goo
   - Added `RUN_GOOGLE_THIN_TEST_V3_6_3_1.ps1`, which skips risk by default for thin validation unless `-IncludeRisk` is supplied.
   - Preserved v3.6.2 Google metadata-storage behavior; no parser semantic change was intended.
 
+
+- `v3.10.0`
+  - Reviewed the v3.7.2 Google thin upload and proceeded directly to the next build as requested.
+  - Fixed the Google Takeout HTML nullability warning path by making HTML event builders null-safe before observed/fallback event creation.
+  - Added `vestigant_google_product_coverage.csv` to validation bundles, with product-level files seen, events generated, behavioral events, fallback/inventory rows, data sources, operations, and coverage status.
+  - Added build assertions for Google product coverage export and null-safe Takeout HTML handling.
+  - Refreshed package documentation, version strings, and PowerShell build/thin-test commands to v3.10.0.
+
+- `v3.7.2`
+  - Reviewed the v3.7.1 Google thin bundle and fixed routing/packaging issues.
+  - Relaxed upload-bundle validation to accept real `validation_bundle/*.zip` names instead of one fixed validation bundle filename.
+  - Prevented Takeout Access Log Activity CSVs from double-routing as Workspace Audit and Takeout.
+  - Prevented Takeout ZIPs containing Gemini files from double-claiming as standalone Gemini Session Archive sources.
+  - Refreshed stale project docs/scripts to v3.7.2.
+
+- `v3.7.1`
+  - Reviewed the v3.7.0 Google thin bundle and uploaded suggestions.
+  - Replaced nested Takeout ZIP in-memory `MemoryStream` parsing with temp-file extraction.
+  - Added bounded buffering for Takeout JSON/HTML/ICS and Gemini text artifacts so oversized files are recorded rather than fully loaded into RAM.
+  - Added stream-based Gmail Takeout MBOX header parser (`MboxParser`) and registered it; MBOX remains opt-in for Google thin runs through `-IncludeMbox`.
+  - Changed Google Chat message target selection to prefer topic/thread ID or message ID while preserving message text in metadata.
+  - Expanded Google-aware risk burst operations and changed Google risk evaluation to use parser-populated `GoogleRisk*` metadata instead of rebuilding large search strings per event.
+  - Updated package/build assertions and PowerShell test commands for v3.7.1.
+
 - `v3.7.0`
   - Reviewed uploaded Google/Takeout/Gemini sample ZIPs before coding.
   - Identified useful source content in Workspace Audit CSVs, Takeout Access Log Activity CSV, Takeout My Activity HTML, Google Chat `messages.json`, Google Meet conference history CSV, Calendar ICS, Mail settings JSON, NotebookLM source HTML, nested Takeout ZIPs, and Gemini session transcript/code/PDF/screenshot artifacts.
@@ -225,15 +266,62 @@ First validate that `v3.7.0` builds on the Windows workstation, then run the Goo
   - Added Gemini transcript/code text extraction previews and risk-term summaries while preserving screenshots/PDFs as metadata-only artifacts.
   - Added validation assertions for the new Google parser capabilities and kept PowerShell test commands updated.
 
+- `v3.10.0`
+  - Reviewed the v3.7.3 Google thin upload and product coverage outputs.
+  - Improved Google Chat `created_date` timestamp parsing for weekday/`at`/UTC strings observed in Takeout `messages.json`.
+  - Improved My Activity HTML timestamp extraction/parsing for Google-style strings with optional weekday, `at`, and timezone abbreviations including IDT/IST.
+  - Added `docs/Google_Source_Roadmap_v3_10_0.md` to capture evidence-driven next steps from thin validation outputs.
+  - Preserved v3.7.x Google routing, metadata-storage, MBOX, validation-bundle, and wrapper behavior.
+
+
+- `v3.10.0`
+  - Built from uploaded v3.8.1 full source plus the v3.8.1 Google thin upload.
+  - Added default suppression of expanded Takeout/Gemini child files when source ZIP archives are also present, because the v3.8.1 thin upload showed archive-level and extracted-file-level duplicate ingestion for Activities, Calendar, Meet, and other Takeout products.
+  - Added `--include-expanded-google-files` and wrapper `-IncludeExpandedGoogleFiles` opt-in for deliberate full duplicate-path coverage.
+  - Added validation-export status heartbeats per validation step.
+  - Added `vestigant_sqlite_object_size_summary.csv` to validation bundles for event count, event_fields count, google_event_raw_fields count, fields-per-event ratios, page metrics, and dbstat object sizes when supported.
+
+- `v3.10.0`
+  - Narrow runtime hotfix for v3.9.0 Google thin failure.
+  - Added explicit `SQLitePCLRaw.bundle_e_sqlite3` package reference and publish-output validation for `e_sqlite3.dll`.
+  - Fixed nullable JSON fallback warning in `GoogleTakeoutParser`.
+  - Preserved v3.9.0 Google duplicate-source suppression and diagnostics.
+
+- `v3.10.0`
+  - Reviewed the successful v3.9.2 Google thin upload first, as required by standing workflow.
+  - Suppressed redundant umbrella `Takeout.zip` archives by default when part-specific Takeout ZIP archives are also present.
+  - Added `--include-duplicate-google-archives` / `-IncludeDuplicateGoogleArchives` opt-in for deliberate full duplicate-path coverage.
+  - Hardened SQLite diagnostics export so count/page metrics are written even when SQLite `dbstat` is unavailable; absence of dbstat is now a warning row, not a CSV-wide failure.
+  - Updated thin wrapper, source automation logging, release docs, and exact PowerShell commands.
+
+- `v3.11.0`
+  - Reviewed the v3.10.0 Google thin upload first.
+  - Added Google raw-storage compaction for raw fields that duplicate promoted event/core/canonical values.
+  - Preserved non-duplicative Google raw fields for unmapped-column review.
+  - Added validation assertions for the compaction helper and refreshed build/test PowerShell commands.
+
+- `v3.12.0`
+  - Reviewed the v3.11.0 Google thin upload first.
+  - Suppressed duplicate same-name/same-size Google archive paths by default.
+  - Preferred root-level archive copies over nested extracted duplicate copies.
+  - Preserved `-IncludeDuplicateGoogleArchives` for deliberate duplicate-path coverage.
+
+- `v3.21.0`
+  - Reviewed the v3.13.0 Google thin upload first.
+  - Compacted repeated low-cardinality Google indexed metadata: `ArtifactType`, `EventTimeBasis`, `EventTimeConfidence`, `GoogleEventCategory`, `GoogleIPClassification`, `GoogleNetworkType`, `GoogleOperationRaw`, and `GoogleRecordType` where safely represented elsewhere.
+  - Preserved meaningful searchable Google fields and forensic provenance.
+  - Added clearer storage threshold rows and two-level health flags.
+  - Improved SQLite object-size fallback output when `dbstat` is unavailable.
+
 ## Known Bugs
 
-- `v3.7.0` has not yet been validated on the Windows workstation with `dotnet build`, `dotnet publish`, and the real `E:\0445_0001` Google source folder.
+- `v3.21.0` has not yet been validated on the Windows workstation with `dotnet build`, `dotnet publish`, and the real `E:\0445_0001` Google source folder.
 - `v3.6.0` failed Windows build because `Core/DatabaseIngest.cs` was truncated; v3.6.1 was intended to fix this.
-- `v3.4.4` Google headless runtime completed successfully, but its validation showed Google Takeout Activities were metadata-only because `Activity Timestamp` values with a `UTC` suffix were not parsed; v3.5.0 attempted to fix this and v3.6.0-v3.7.0 preserve that fix while changing metadata separation/storage.
+- `v3.4.4` Google headless runtime completed successfully, but its validation showed Google Takeout Activities were metadata-only because `Activity Timestamp` values with a `UTC` suffix were not parsed; v3.5.0 attempted to fix this and v3.6.0-v3.21.0 preserve that fix while changing metadata separation/storage.
 - Google Takeout parsing is first-pass only and likely needs product-by-product expansion after reviewing validation output.
 - Gemini session ingestion is first-pass archive inventory and likely needs richer transcript/file-content extraction and risk correlation.
 - Google Cloud Logging JSON/NDJSON and BigQuery-style exports are planned but not yet implemented.
-- The large `Part3_All mail Including Spam and Trash` MBOX visible in the user screenshot is included only as candidate source/metadata inventory at this stage unless a specific MBOX parser is added.
+- The large `Part3_All mail Including Spam and Trash` MBOX remains excluded by default from fast Google thin runs, but v3.7.1 added an opt-in stream-based header-only MBOX parser through `-IncludeMbox`.
 - The `v3.3.13` run failed with executable exit code `2`; v3.3.14 added better diagnostics and validation export hardening, but the exact original exception was not confirmed from the pasted log.
 - The GUI DataGridView popup issue was addressed in v3.3.18 but still needs confirmation in the user’s workstation GUI after rebuilding and opening affected tabs.
 
@@ -283,3 +371,55 @@ First validate that `v3.7.0` builds on the Windows workstation, then run the Goo
 - Do not generate or package a ZIP without reviewing source code, package contents, version strings, ai_context.md, CHANGELOG.md, wrapper scripts, and the needed PowerShell test/run commands together.
 - Do not diagnose Google source coverage from assumptions when uploaded sample archives/logs are available. Correct fix: inspect actual ZIP contents, schemas, sample rows, JSON/HTML/ICS structures, and then implement parser support for useful content.
 - Do not leave rebuilt packages without exact PowerShell commands for build validation and test runs.
+
+- Do not globally replace old version strings across historical changelog/context entries. Correct fix: update only current package metadata and prepend new version sections while preserving historical version text.
+- Do not load massive Google Takeout or Gemini text artifacts fully into RAM. Correct fix: use streaming parsers where practical or bounded buffering with metadata-only observations for oversized artifacts.
+- Do not expand nested Takeout ZIPs into large `MemoryStream` buffers. Correct fix: extract bounded nested ZIP entries to temp files and delete them in `finally`.
+- Do not rely on generic endpoint-only burst operations for Google risk. Correct fix: include Google Drive, Takeout, Gmail, and MBOX operations in cloud burst detection and use parser-supplied Google risk metadata.
+
+- Do not validate upload-bundle validation inclusion by requiring a fixed inner ZIP filename such as `validation_bundle/VestigantCase_validation_bundle.zip`. Correct fix: accept a real non-empty generated validation bundle ZIP under `validation_bundle/*.zip` and inspect its required CSV/JSON/readme entries.
+- Do not route Takeout Access Log Activity CSVs through both Google Workspace Audit and Google Takeout solely because the filename contains `Activities - A list of Google services accessed by.csv`. Correct fix: use path/container context to keep Takeout activity exports in Takeout and Workspace Audit exports in Workspace Audit.
+- Do not ship root/package documentation with stale version-specific PowerShell commands after a rebuild. Correct fix: review README, BUILD_NOTES, VALIDATION_STATUS, PROJECT_ROADMAP, ai_context, CHANGELOG, and runner scripts together before exporting ZIPs.
+
+- Do not stop at roadmap-only text after thin upload when the standing instruction is to proceed. Correct fix: generate the next package and include exact PowerShell build/test commands unless the user explicitly says to pause.
+
+## Standing Release/Testing Rule Added in v3.10.0
+
+- If the user uploads a thin upload, review the thin output first and then automatically proceed to the next version/build unless the user explicitly says to pause.
+- Every rebuilt package must include exact PowerShell build/test/run commands in the response and in package documentation.
+- Before every ZIP is provided, review all code/content and required PowerShell scripts for current version consistency, including `ai_context.md`, `CHANGELOG.md`, `tools/Create-TriageUploadBundle.ps1`, `tools/Build-And-Validate-VestigantTriage.ps1`, Google thin wrappers, and required test helper scripts.
+- Treat missing current changelog headings, stale upload-bundle versions, missing runner scripts, and broken wrapper parameter passing as release-blocking graveyard items.
+- Google thin validation should include SQLite growth metrics using `tools/Get-GoogleCaseSqliteMetrics.ps1` when a case database is produced.
+
+- Do not let Google thin tests ingest both source ZIP archives and their already-expanded Takeout/Gemini child files by default. Correct fix: prefer archives for default thin validation and require `--include-expanded-google-files` / `-IncludeExpandedGoogleFiles` for deliberate duplicate-path/full-coverage testing.
+- Do not ship a Google validation bundle without database-size diagnostics. Correct fix: include event counts, metadata counts, fields-per-event ratios, and SQLite table/index object sizes where available.
+
+- Do not treat a successful managed .NET build/publish as sufficient when native provider DLLs are missing. Correct fix: build validation must verify native runtime dependencies such as `e_sqlite3.dll` exist in the published output before running thin tests.
+
+
+- Do not assume `dotnet build` always writes the framework-dependent executable to `bin\Release\net8.0-windows`. If the project sets `RuntimeIdentifier=win-x64`, validate the RID-specific build output under `bin\Release\net8.0-windows\win-x64` as well.
+
+
+## v3.21.0 raw metadata compaction
+
+Built from v3.14.0 after reviewing the v3.14.0 Google thin upload. Focus: reduce remaining Google raw-field volume and add `vestigant_google_raw_field_classification.csv` to classify raw fields by storage-review category. Preserve source row reconstruction, source coverage, schema coverage, unmapped columns, field collision review, and product/device/IP summaries.
+
+
+## v3.21.0 v4 readiness diagnostics
+
+Prepared from the v3.15.0 source package and v3.15.0 thin upload available in this chat workspace. v3.15.0 thin status evidence: complete run, 7 sources, risk skipped, expanded Google files not included, validation bundle exported. v3.15.0 storage evidence: 498,978 events, 11,436,215 event_fields, 3,800,659 google_event_raw_fields, averages 22.92 indexed fields/event and 7.62 raw Google fields/event, indexed/raw storage health OK. v3.21.0 adds `vestigant_google_v4_readiness_summary.csv` to distinguish storage success from pending risk and expanded/duplicate archive validation.
+
+## v3.21.0 continuation note
+
+User-provided v3.17.0 heartbeat evidence showed risk per-event processing finished, then sequence detection remained in `risk_running` without new progress for several minutes. Treat this as a roadmap-blocking performance issue for full investigations. v3.21.0 adds bounded risk sequence detection and documents full-ingest safeguards: bounded exports, export cost classes, timeout/cancel behavior, and avoiding expensive joined CSV dumps by default.
+
+
+## v3.21.0 - Risk sequence timeout and export safeguard validation
+
+Evidence basis: the v3.17.x risk/duplicate heartbeat showed per-event risk rules completed, then the run stayed in multi-event sequence detection without new progress. v3.21.0 treats that as a roadmap-blocking full-investigation performance issue.
+
+Implemented safeguards:
+- Risk sequence detection now exposes `sequenceMaxCandidatesPerUser` and `sequenceTimeoutSeconds` in addition to comparison and hit caps.
+- Sequence detection logs skipped candidates, timeout stops, and bounded progress status.
+- Validation now includes `vestigant_export_safeguards_summary.csv` to document bounded exports, export cost classes, timeout/cancel behavior, and the default avoidance of expensive joined CSV dumps.
+- Build validation asserts the new risk and export-safeguard markers.

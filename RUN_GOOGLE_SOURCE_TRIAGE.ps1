@@ -9,13 +9,15 @@ param(
     [switch]$SkipRisk,
     [switch]$HashGoogleSources,
     [switch]$IncludeMbox,
+    [switch]$IncludeExpandedGoogleFiles,
+    [switch]$IncludeDuplicateGoogleArchives,
     [switch]$CleanCase,
     [switch]$ReuseCase
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
-$Version = "3.7.0"
+$Version = "3.21.0"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 
 function Assert-PathIsNotPlaceholder {
@@ -133,7 +135,7 @@ if (-not (Test-Path -LiteralPath $CaseBaseRoot -PathType Container)) {
 }
 if ([string]::IsNullOrWhiteSpace($CaseRoot)) {
     if ([string]::IsNullOrWhiteSpace($CaseName)) {
-        $CaseName = "V3_7_0_Google_0445_0001_$Stamp"
+        $CaseName = "V3_21_0_Google_0445_0001_$Stamp"
     }
     $CaseRoot = Join-Path $CaseBaseRoot $CaseName
 }
@@ -152,8 +154,8 @@ New-Item -ItemType Directory -Force -Path $CaseRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $CaseRoot "Upload") | Out-Null
 if ([string]::IsNullOrWhiteSpace($OutZip)) {
     $safeCase = ($CaseName -replace '[^A-Za-z0-9._-]', '_').Trim('_','.')
-    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_7_0_GoogleSourceTriage_$Stamp" }
-    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_7_0_$safeCase.zip"
+    if ([string]::IsNullOrWhiteSpace($safeCase)) { $safeCase = "V3_21_0_GoogleSourceTriage_$Stamp" }
+    $OutZip = "D:\Downloads\Upload_VestigantTriage_v3_21_0_$safeCase.zip"
 }
 
 $script:RunLog = Join-Path $CaseRoot "Upload\RUN_GOOGLE_SOURCE_TRIAGE_$Stamp.log"
@@ -169,6 +171,8 @@ Write-RunLog "CaseName: $CaseName"
 Write-RunLog "OutZip: $OutZip"
 Write-RunLog "HashGoogleSources: $($HashGoogleSources.IsPresent)"
 Write-RunLog "IncludeMbox: $($IncludeMbox.IsPresent)"
+Write-RunLog "IncludeExpandedGoogleFiles: $($IncludeExpandedGoogleFiles.IsPresent)"
+Write-RunLog "IncludeDuplicateGoogleArchives: $($IncludeDuplicateGoogleArchives.IsPresent)"
 Write-RunLog "SkipRisk: $($SkipRisk.IsPresent)"
 
 if (-not $SkipBuild) {
@@ -193,6 +197,8 @@ if ($SkipIngest) { $HeadlessArgs += "--skip-ingest" }
 if ($SkipRisk) { $HeadlessArgs += "--skip-risk" }
 if ($HashGoogleSources) { $HeadlessArgs += "--hash-google-sources" }
 if ($IncludeMbox) { $HeadlessArgs += "--include-mbox" }
+if ($IncludeExpandedGoogleFiles) { $HeadlessArgs += "--include-expanded-google-files" }
+if ($IncludeDuplicateGoogleArchives) { $HeadlessArgs += "--include-duplicate-google-archives" }
 
 Write-RunLog "Starting headless Google source triage run."
 Write-RunLog "Command: `"$Exe`" $($HeadlessArgs -join ' ')"

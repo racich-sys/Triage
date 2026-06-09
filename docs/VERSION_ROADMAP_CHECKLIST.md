@@ -1,20 +1,11 @@
-# Vestigant Triage Version Roadmap Checklist
+# Version Roadmap Checklist - v3.21.0
 
-## v3.6.3.1 - Google framework build fix and ai_context baseline
-
-- [x] Build from v3.4.0 baseline.
-- [x] Fix invalid C# backslash character literal in `Parsers\ParserRegistry.cs`.
-- [x] Add root `ai_context.md`.
-- [x] Include `ai_context.md` in upload/project documentation packaging.
-- [x] Add build-validation assertions for `ai_context.md` presence and packaging.
-- [ ] Build on Windows workstation.
-- [ ] Run real fixed-image headless case.
-- [ ] Upload v3.6.3.1 validation bundle for review.
-
-## v3.6.3.1 or v3.6.3.1 - Google validation hardening
-
-- [ ] Review Google Workspace Audit ZIP ingestion results.
-- [ ] Review Google Takeout ingestion results.
-- [ ] Review Gemini session archive ingestion results.
-- [ ] Improve Google schema mapping and risk correlation based on validation output.
-- [ ] Add Google Cloud Logging JSON/NDJSON support when sample data is available.
+- [x] Update AppInfo/csproj/script version strings to v3.21.0.
+- [x] Rename Google thin wrapper to `RUN_GOOGLE_THIN_TEST_V3_21_0.ps1`.
+- [x] Verify upload-bundle version token is `3_21_0`.
+- [x] Preserve root-level continuation docs only; no separate root-level per-version `V*.md` files.
+- [x] Add risk sequence timeout/candidate safeguards for risk + duplicate coverage runs.
+- [x] Add full-investigation export safeguard summary validation.
+- [ ] Validate Windows build/publish on the workstation.
+- [ ] Run default Google thin test.
+- [ ] Run risk + duplicate Google validation.

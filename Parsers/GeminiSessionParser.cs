@@ -10,14 +10,25 @@ namespace VestigantTriage;
 
 public class GeminiSessionParser : IArtifactParser
 {
+    private const long MaxBufferedTextBytes = 32L * 1024L * 1024L;
+
     public string ParserName => "Gemini Session Archive";
 
     public bool CanParse(string filePath)
     {
         var lower = filePath.Replace('\\', '/').ToLowerInvariant();
         if (GoogleSourceSupport.IsZip(filePath))
+        {
+            if (LooksLikeGoogleTakeoutContainer(lower)) return false;
             return lower.Contains("gemini") || GoogleSourceSupport.ZipContains(filePath, IsGeminiEntry);
+        }
         return IsGeminiEntry(filePath);
+    }
+
+    private static bool LooksLikeGoogleTakeoutContainer(string path)
+    {
+        var p = (path ?? string.Empty).Replace('\\', '/').ToLowerInvariant();
+        return p.Contains("takeout") || p.Contains("google takeout");
     }
 
     public IEnumerable<NormalizedEvent> Parse(string filePath, string tzName, Action<string> log)
@@ -29,9 +40,16 @@ public class GeminiSessionParser : IArtifactParser
             {
                 if (entry.FullName.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase) || entry.FullName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || entry.FullName.EndsWith(".py", StringComparison.OrdinalIgnoreCase))
                 {
-                    using var stream = entry.Open();
-                    using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                    yield return BuildTextEvent(filePath, entry.FullName, entry.Length, entry.LastWriteTime.UtcDateTime, reader.ReadToEnd());
+                    if (entry.Length <= MaxBufferedTextBytes)
+                    {
+                        using var stream = entry.Open();
+                        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                        yield return BuildTextEvent(filePath, entry.FullName, entry.Length, entry.LastWriteTime.UtcDateTime, reader.ReadToEnd());
+                    }
+                    else
+                    {
+                        yield return BuildLargeTextEvent(filePath, entry.FullName, entry.Length, entry.LastWriteTime.UtcDateTime);
+                    }
                 }
                 else
                 {
@@ -43,8 +61,10 @@ public class GeminiSessionParser : IArtifactParser
 
         var fi = new FileInfo(filePath);
         var textExt = filePath.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".py", StringComparison.OrdinalIgnoreCase);
-        if (textExt && fi.Exists)
+        if (textExt && fi.Exists && fi.Length <= MaxBufferedTextBytes)
             yield return BuildTextEvent(filePath, Path.GetFileName(filePath), fi.Length, fi.LastWriteTimeUtc, File.ReadAllText(filePath));
+        else if (textExt && fi.Exists)
+            yield return BuildLargeTextEvent(filePath, Path.GetFileName(filePath), fi.Length, fi.LastWriteTimeUtc);
         else
             yield return BuildEvent(filePath, Path.GetFileName(filePath), fi.Exists ? fi.Length : 0, fi.Exists ? fi.LastWriteTimeUtc : DateTime.MinValue);
     }
@@ -56,11 +76,22 @@ public class GeminiSessionParser : IArtifactParser
         return p.Contains("transcript") || p.Contains("code extract") || p.Contains("output pdf") || p.Contains("screenshot") || p.EndsWith(".rtf") || p.EndsWith(".rtfd") || p.EndsWith(".py") || p.EndsWith(".pdf") || p.EndsWith(".png") || p.EndsWith(".jpg") || p.EndsWith(".jpeg") || p.EndsWith(".txt");
     }
 
+    private static NormalizedEvent BuildLargeTextEvent(string container, string entry, long bytes, DateTime lastWriteUtc)
+    {
+        var ev = BuildEvent(container, entry, bytes, lastWriteUtc);
+        ev.Operation = BuildGeminiOperation(entry, largeText: true);
+        ev.AdditionalFields["GoogleGeminiExtractedTextAvailable"] = "No";
+        ev.AdditionalFields["GoogleGeminiLargeTextSkipped"] = "Yes";
+        ev.AdditionalFields["GoogleGeminiBufferedTextLimitBytes"] = MaxBufferedTextBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        ev.AdditionalFields["GoogleRiskReason"] = "Large Gemini text artifact observed without buffering full content into memory; review source artifact directly or add targeted streaming extraction.";
+        return ev;
+    }
+
     private static NormalizedEvent BuildTextEvent(string container, string entry, long bytes, DateTime lastWriteUtc, string text)
     {
         var ev = BuildEvent(container, entry, bytes, lastWriteUtc);
         var cleaned = entry.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase) ? RtfToPlainText(text) : GoogleSourceSupport.Clean(text);
-        ev.Operation = "GeminiSession_" + Classify(entry) + "_TextExtracted";
+        ev.Operation = BuildGeminiOperation(entry, largeText: false);
         ev.AdditionalFields["GoogleGeminiExtractedTextAvailable"] = "Yes";
         ev.AdditionalFields["GoogleGeminiExtractedTextPreview"] = Truncate(cleaned, 4000);
         ev.AdditionalFields["GoogleGeminiExtractedTextLength"] = cleaned.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -75,7 +106,7 @@ public class GeminiSessionParser : IArtifactParser
         {
             DataSource = "Gemini Session Archive",
             UserId = "Unknown",
-            Operation = "GeminiSession_" + kind + "_Observed",
+            Operation = BuildGeminiOperation(entry, largeText: false),
             ObjectPath = entry,
             TimestampUtc = lastWriteUtc == DateTime.MinValue ? DateTime.MinValue : lastWriteUtc,
             EventTimeBasis = "GeminiSessionArchiveEntryLastWrite",
@@ -97,6 +128,15 @@ public class GeminiSessionParser : IArtifactParser
         ev.AdditionalFields["GoogleRiskAiPotential"] = "Yes";
         ev.AdditionalFields["GoogleRiskReason"] = "Gemini AI session artifact retained for AI-use review and correlation.";
         return ev;
+    }
+
+    private static string BuildGeminiOperation(string entry, bool largeText)
+    {
+        var kind = Classify(entry);
+        if (kind == "Transcript") return largeText ? "GoogleGemini_PromptObserved_LargeText" : "GoogleGemini_PromptObserved";
+        if (kind == "OutputDocument") return "GoogleGemini_OutputObserved";
+        if (kind == "CodeExtract") return "GoogleGemini_OutputObserved";
+        return "GoogleGemini_SessionObserved";
     }
 
     private static string Classify(string entry)
